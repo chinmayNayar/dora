@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DORA DevOps Dashboard - IndiGo OCP</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--br:#1a3acc;--br2:#3b5cf5;--ok:#0a9450;--wn:#c47900;--er:#c52c27;--pu:#6b4fff;--t1:#0d1f33;--t2:#4a6070;--t3:#7b90a5;--bd:#dde5ef;--bd2:#c4d0e2;--fn:'Inter',sans-serif;--fm:'JetBrains Mono',monospace}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:linear-gradient(#3b5cf5,#1a3acc);border-radius:3px}
+.hdr{background:linear-gradient(135deg,#0e2899,#1a3acc,#3b5cf5);height:70px;display:flex;align-items:center;gap:14px;padding:0 24px;position:sticky;top:0;z-index:100;box-shadow:0 4px 20px rgba(14,40,153,.3)}
+.logo{height:40px;border-radius:9px;background:rgba(255,255,255,.18);padding:4px 8px;border:1px solid rgba(255,255,255,.28)}
+.hdiv{width:1px;height:28px;background:rgba(255,255,255,.25);flex-shrink:0}
+.htitle h1{font-size:15px;font-weight:900;color:#fff;letter-spacing:-.2px}.htitle p{font-size:11px;color:rgba(255,255,255,.72);margin-top:1px}
+.hr{margin-left:auto;display:flex;align-items:center;gap:9px}
+.clock{font-size:11px;color:rgba(255,255,255,.8);font-variant-numeric:tabular-nums}
+.lbdg,.dbdg{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);font-size:10px;font-weight:800;text-transform:uppercase}
+.lbdg{color:#afffcb}.dbdg{color:#fff}
+.ldot{width:6px;height:6px;border-radius:50%;background:#7fffa8;animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.btn{height:32px;padding:0 13px;border-radius:9px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:#fff;font-size:12px;font-weight:700;cursor:pointer}
+.btn:hover{background:rgba(255,255,255,.26)}.btnp{background:rgba(255,255,255,.93)!important;color:#1a3acc!important;border-color:transparent!important}
+.fbar{background:rgba(243,246,255,.97);border-bottom:1px solid #d0d9ee;padding:8px 24px;display:flex;align-items:center;gap:11px;flex-wrap:wrap;position:sticky;top:70px;z-index:99}
+.fg{display:flex;align-items:center;gap:7px}.fl{font-size:11px;font-weight:700;color:var(--t3)}
+.fsl{height:30px;padding:0 10px;border:1px solid var(--bd2);border-radius:8px;background:#fff;color:var(--t1);font-size:12px;font-weight:600;min-width:150px;cursor:pointer}
+.fok{height:30px;padding:0 13px;background:var(--br);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}.fok:hover{background:var(--br2)}
+.fsep{width:1px;height:18px;background:var(--bd)}.lu{margin-left:auto;font-size:11px;color:var(--t3)}
+.tnav{background:#fff;border-bottom:1px solid var(--bd);padding:0 24px;display:flex;position:sticky;top:116px;z-index:98;box-shadow:0 2px 6px rgba(0,0,0,.04)}
+.tb{height:44px;padding:0 18px;border:none;background:transparent;font-size:13px;font-weight:700;color:#5a7090;cursor:pointer;border-bottom:3px solid transparent;transition:all .2s}
+.tb:hover{color:var(--br);background:#f0f5ff}.tb.on{color:var(--br);border-bottom-color:var(--br)}
+.tc{display:none}.tc.on{display:block}
+.main{max-width:1680px;margin:0 auto;padding:20px 24px 36px}
+.kgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px}
+.kc{border-radius:18px;padding:22px 20px 18px;position:relative;overflow:hidden;cursor:pointer;transition:transform .2s,box-shadow .2s;border:none}
+.kc:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,.14)}
+.kc.c1{background:linear-gradient(145deg,#dde8ff,#eef3ff 60%,#f8faff);box-shadow:0 4px 20px rgba(26,58,204,.15)}
+.kc.c2{background:linear-gradient(145deg,#fef0d4,#fff7e8 60%,#fffdf8);box-shadow:0 4px 20px rgba(196,121,0,.15)}
+.kc.c3{background:linear-gradient(145deg,#d4f5e4,#eaf9f1 60%,#f8fefb);box-shadow:0 4px 20px rgba(10,148,80,.15)}
+.kc.c4{background:linear-gradient(145deg,#e8e2ff,#f2eeff 60%,#fbfaff);box-shadow:0 4px 20px rgba(107,79,255,.15)}
+.kc-circle{position:absolute;width:90px;height:90px;border-radius:50%;top:-15px;right:-15px;opacity:.1}
+.kc.c1 .kc-circle{background:#1a3acc}.kc.c2 .kc-circle{background:#c47900}.kc.c3 .kc-circle{background:#0a9450}.kc.c4 .kc-circle{background:#6b4fff}
+.kc-icon{font-size:22px;margin-bottom:8px;display:block}
+.kc-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:rgba(0,0,0,.38);margin-bottom:8px}
+.kc-value{font-size:44px;font-weight:900;line-height:1;letter-spacing:-2.5px;display:block;margin-bottom:10px;white-space:nowrap}
+.kc.c1 .kc-value{color:#0e2899}.kc.c2 .kc-value{color:#7a4e00}.kc.c3 .kc-value{color:#056634}.kc.c4 .kc-value{color:#3d1eb5}
+.kc-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.kc-badge{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;padding:4px 11px;border-radius:999px;color:#fff}
+.kc.c1 .kc-badge{background:#1a3acc}.kc.c2 .kc-badge{background:#c47900}.kc.c3 .kc-badge{background:#0a9450}.kc.c4 .kc-badge{background:#6b4fff}
+.kc-desc{font-size:11px;color:rgba(0,0,0,.45);line-height:1.4}
+.kc-hint{font-size:10px;font-weight:700;margin-top:8px;opacity:.7}
+.kc.c1 .kc-hint{color:#1a3acc}.kc.c2 .kc-hint{color:#c47900}.kc.c3 .kc-hint{color:#0a9450}.kc.c4 .kc-hint{color:#6b4fff}
+.g3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px}.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.g21{display:grid;grid-template-columns:2fr 1fr;gap:14px}.g12{display:grid;grid-template-columns:1fr 2fr;gap:14px}
+.sgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}
+.dvd{height:1px;background:var(--bd);margin:4px 0 20px}.sec{margin-bottom:24px}
+.shr{display:flex;align-items:center;gap:11px;margin-bottom:13px}.sti{font-size:16px;font-weight:900;letter-spacing:-.2px}.ssu{font-size:11px;color:var(--t2);margin-top:2px}
+.pil{display:inline-flex;padding:4px 10px;border-radius:999px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;background:#edf2ff;color:var(--br);border:1px solid #ccd6ff}
+.pil.w{background:#fff7e6;color:var(--wn);border-color:#f5dba0}.pil.s{background:#edfaf3;color:var(--ok);border-color:#c3e8d8}.pil.p{background:#f3f0ff;color:var(--pu);border-color:#d4c8ff}
+.card{background:#fff;border:1px solid rgba(210,222,240,.8);border-radius:16px;padding:16px;box-shadow:0 3px 14px rgba(13,31,51,.06)}
+.ch{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:11px;display:flex;align-items:center;justify-content:space-between}
+.cb{font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;background:#edf2ff;color:var(--br);border:1px solid #ccd6ff}
+.cc{position:relative}.h240{height:240px}.h300{height:300px}.h360{height:360px}.h180{height:180px}
+.scard{border:1px solid rgba(210,222,240,.7);border-radius:14px;padding:16px;text-align:center;position:relative;overflow:hidden;box-shadow:0 3px 10px rgba(13,31,51,.05)}
+.scard:nth-child(1){background:linear-gradient(160deg,#eef2ff,#fff)}.scard:nth-child(2){background:linear-gradient(160deg,#edfaf3,#fff)}
+.scard:nth-child(3){background:linear-gradient(160deg,#fff8e6,#fff)}.scard:nth-child(4){background:linear-gradient(160deg,#fef1f0,#fff)}
+.sac{height:4px;position:absolute;top:0;left:0;right:0}.sv{font-size:32px;font-weight:900;letter-spacing:-1px;margin-bottom:4px}.sl{font-size:11px;color:var(--t2)}
+.tli{display:flex;align-items:center;gap:10px;padding:6px 4px;border-bottom:1px solid var(--bd);cursor:pointer;transition:background .12s;border-radius:8px}
+.tli:last-child{border-bottom:none}.tli:hover{background:#f0f5ff}
+.tln{font-family:var(--fm);font-size:11px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tlb{height:4px;background:#edf1f7;border-radius:999px;margin-top:4px}.tlf{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--br),var(--br2))}.tlv{font-size:12px;font-weight:800;color:var(--br);white-space:nowrap}
+.inci{display:flex;gap:10px;padding:9px 4px;border-bottom:1px solid var(--bd);cursor:pointer;border-radius:8px;transition:background .12s}.inci:last-child{border-bottom:none}.inci:hover{background:#f0f5ff}
+.idot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex-shrink:0}.ipr{font-size:13px;font-weight:700}.ich{font-family:var(--fm);font-size:10px;color:var(--br);margin-left:6px}
+.ids{font-size:11px;color:var(--t2);margin-top:2px}.idt{font-size:10px;color:var(--t3);margin-top:1px}
+.etbl{width:100%;border-collapse:collapse}
+.etbl thead th{text-align:left;padding:8px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);border-bottom:2px solid var(--bd2);background:#f4f7ff;white-space:nowrap;font-weight:800}
+.etbl tbody tr{cursor:pointer}.etbl tbody tr:hover td{background:#f0f5ff}
+.etbl tbody td{padding:8px 11px;font-size:12px;border-bottom:1px solid var(--bd);vertical-align:middle}.etbl tbody tr:last-child td{border-bottom:none}
+.bdg{display:inline-flex;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:700;border:1px solid}.bok{background:#edfaf3;color:var(--ok);border-color:#c3e8d8}.bwn{background:#fff7e6;color:var(--wn);border-color:#f5dba0}
+.pgn{display:flex;align-items:center;justify-content:space-between;padding:11px 0 0;border-top:1px solid var(--bd);margin-top:5px}.pgi{font-size:12px;color:var(--t2)}.pgb{display:flex;gap:3px}
+.pb{height:28px;min-width:28px;padding:0 8px;border-radius:8px;border:1px solid var(--bd2);background:#fff;color:var(--t1);font-size:12px;cursor:pointer;font-weight:600}
+.pb:hover{background:#f0f5ff}.pb.on{background:var(--br);color:#fff;border-color:var(--br)}.pb:disabled{opacity:.4;cursor:not-allowed}
+.othbox{margin-top:13px;border-top:1px dashed var(--bd2);padding-top:13px}.othtitle{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:9px}
+.othgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px}.othi{font-size:11px;color:var(--t2);padding:5px 9px;background:#f4f7fb;border:1px solid var(--bd);border-radius:7px;font-family:var(--fm);cursor:pointer}.othi:hover{background:#edf2ff}
+.movl{position:fixed;inset:0;background:rgba(13,31,51,.48);z-index:999;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}.movl.on{display:flex}
+.modal{background:#fff;border-radius:18px;padding:24px;width:720px;max-width:94vw;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(13,31,51,.22)}
+.scard.active-metric{outline:2px solid var(--br);box-shadow:0 0 0 3px rgba(26,58,204,.12)}
+.mhdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bd);padding-bottom:13px;margin-bottom:16px}.mtitle{font-size:15px;font-weight:900}
+.mx{width:28px;height:28px;border-radius:50%;border:1px solid var(--bd);background:transparent;cursor:pointer;font-size:13px}
+.ldg{text-align:center;padding:28px;color:var(--t3);font-size:12px}.ftr{background:#f0f4ff;border-top:1px solid var(--bd);padding:13px 24px 22px;display:flex;gap:13px;font-size:11px;color:var(--t3);flex-wrap:wrap}
+.cmr-stage-pill{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:9px;font-weight:700;background:#edf2ff;color:var(--br);border:1px solid #ccd6ff;margin:2px}
+/* ── Expandable Service Name Cards (4-col vertical grid) ── */
+.svc-section{margin-bottom:14px}
+.svc-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.svc-label span{font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px;color:#fff}
+.svc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.svc-card{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;transition:all .15s;cursor:default;position:relative;overflow:hidden}
+.svc-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:3px 0 0 3px}
+.svc-card.ms{background:linear-gradient(135deg,#f0f4ff,#f8faff);border:1px solid #d4dfff}
+.svc-card.ms::before{background:#1a3acc}
+.svc-card.mf{background:linear-gradient(135deg,#edfaf3,#f8fefb);border:1px solid #c3e8d8}
+.svc-card.mf::before{background:#0a9450}
+.svc-card.nms{background:linear-gradient(135deg,#fff4e6,#fffaf0);border:1px solid #fcd9a0}
+.svc-card.nms::before{background:#f97316}
+.svc-card.nmf{background:linear-gradient(135deg,#f5f0ff,#fbfaff);border:1px solid #d4c8ff}
+.svc-card.nmf::before{background:#a855f7}
+.svc-card:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.08)}
+.svc-card-icon{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;flex-shrink:0}
+.svc-card.ms .svc-card-icon{background:linear-gradient(135deg,#1a3acc,#3b5cf5)}
+.svc-card.mf .svc-card-icon{background:linear-gradient(135deg,#0a9450,#22c55e)}
+.svc-card.nms .svc-card-icon{background:linear-gradient(135deg,#ea580c,#f97316)}
+.svc-card.nmf .svc-card-icon{background:linear-gradient(135deg,#7c3aed,#a855f7)}
+.svc-card-info{flex:1;min-width:0}
+.svc-card-name{font-family:var(--fm);font-size:11px;font-weight:600;color:var(--t1);word-break:break-all;line-height:1.3}
+.svc-card-type{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+.svc-card.ms .svc-card-type{color:#1a3acc}
+.svc-card.mf .svc-card-type{color:#0a9450}
+.svc-card.nms .svc-card-type{color:#f97316}
+.svc-card.nmf .svc-card-type{color:#a855f7}
+.svc-stats{display:flex;gap:10px;margin-bottom:10px;padding:8px 12px;background:#f8faff;border:1px solid var(--bd);border-radius:8px}
+.svc-stat{text-align:center;flex:1}
+.svc-stat-val{font-size:18px;font-weight:900;line-height:1}
+.svc-stat-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);margin-top:2px}
+.svc-none{font-size:10px;color:var(--t3);font-style:italic;padding:8px 0}
+@media(max-width:1200px){.svc-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:800px){.svc-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <img src="/logo.png.webp" alt="IndiGo" class="logo" onerror="this.style.display='none';document.getElementById('lfb').style.cssText='display:flex;height:40px;min-width:54px;background:rgba(255,255,255,.18);border-radius:9px;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#fff;border:1px solid rgba(255,255,255,.28)'">
+  <div id="lfb" style="display:none">6E</div>
+  <div class="hdiv"></div>
+  <div class="htitle"><h1>DORA DevOps Dashboard &mdash; OCP Infra</h1><p>IndiGo Airlines &nbsp;&middot;&nbsp; OCP Production Clusters &nbsp;&middot;&nbsp; Real-Time Engineering Intelligence</p></div>
+  <div class="hr">
+    <span class="clock" id="clock">&mdash;</span>
+    <span class="lbdg"><span class="ldot"></span>Prod Live</span>
+    <span class="dbdg" id="dbdg">DORA Metrics</span>
+    <button class="btn" onclick="window.print()">&#8595; Export</button>
+    <button class="btn btnp" onclick="refreshAll()">&#8635; Refresh</button>
+  </div>
+</header>
+
+<div class="fbar">
+  
+  <div class="fsep"></div>
+  <div class="fg"><span class="fl">Cluster</span>
+    <select class="fsl" id="f-cluster">
+      <option value="">All Clusters</option>
+      <option value="ocpappprdclu2">ocpappprdclu2</option>
+      <option value="ssocpappprdclu">ssocpappprdclu</option>
+      <option value="ocpappprdclu">ocpappprdclu</option>
+      <option value="ocpintprdclu2">ocpintprdclu2</option>
+      <option value="ocpintprdclu">ocpintprdclu</option>
+    </select>
+  </div>
+  <div class="fsep"></div>
+  <div class="fg"><span class="fl">Time Range</span>
+    <select class="fsl" id="f-time" onchange="toggleCustomDateInputs()">
+      <option value="now-24h">Last 24 Hours</option>
+      <option value="now-2d">Last 2 Days</option>
+      <option value="now-7d">Last 7 Days</option>
+      <option value="now-14d">Last 14 Days</option>
+      <option value="now-30d">Last 30 Days</option>
+      <option value="now-90d">Last 90 Days</option>
+      <option value="all" selected>All available</option>
+      <option value="custom">Custom range</option>
+    </select>
+  </div>
+  <div class="fg" id="custom-date-wrap" style="display:none;gap:6px">
+    <span class="fl">From</span><input class="fsl" id="f-from" type="date" style="min-width:150px">
+    <span class="fl">To</span><input class="fsl" id="f-to" type="date" style="min-width:150px">
+  </div>
+  <button class="fok" onclick="applyF()">Apply</button>
+  <span class="lu" id="lu">Initializing...</span>
+</div>
+
+<nav class="tnav">
+  <button class="tb on" data-tab="overview">&#128202; Overview</button>
+  <button class="tb" data-tab="dora">&#128269; DORA Metrics</button>
+  <button class="tb" data-tab="cmr">&#128203; CMR Tracker</button>
+  <button class="tb" data-tab="projects">&#128101; Projects</button>
+  <button class="tb" data-tab="pipeline">&#9881; Pipeline</button>
+</nav>
+
+<div class="movl" id="movl" onclick="closeMod()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="mhdr"><div class="mtitle" id="mtitle">Details</div><button class="mx" onclick="closeMod()">&#10005;</button></div>
+    <div id="mbody"></div>
+  </div>
+</div>
+
+<main class="main">
+
+  <div id="tab-overview" class="tc on">
+    <div style="background:linear-gradient(135deg,#0e2899,#1a3acc);border-radius:16px;padding:18px 24px;margin-bottom:20px;display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.55);margin-bottom:3px">DORA Summary</div>
+        <div style="font-size:22px;font-weight:900;color:#fff">Delivery Performance</div>
+        <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:1px">IndiGo OCP Infra &mdash; live ServiceNow data</div>
+      </div>
+      <div style="width:1px;height:44px;background:rgba(255,255,255,.2)"></div>
+      <div style="text-align:center"><div style="font-size:24px;font-weight:900;color:#7fffa8" id="sum-cmrs">—</div><div style="font-size:9px;color:rgba(255,255,255,.55);font-weight:800;text-transform:uppercase;letter-spacing:.08em">CMRs Deployed</div></div>
+      <div style="width:1px;height:44px;background:rgba(255,255,255,.2)"></div>
+      <div style="text-align:center"><div style="font-size:24px;font-weight:900;color:#aff" id="sum-cfr">—</div><div style="font-size:9px;color:rgba(255,255,255,.55);font-weight:800;text-transform:uppercase;letter-spacing:.08em">CFR</div></div>
+      <div style="width:1px;height:44px;background:rgba(255,255,255,.2)"></div>
+      <div style="text-align:center"><div style="font-size:24px;font-weight:900;color:#ffd580" id="sum-proj">—</div><div style="font-size:9px;color:rgba(255,255,255,.55);font-weight:800;text-transform:uppercase;letter-spacing:.08em">Projects</div></div>
+      <div style="width:1px;height:44px;background:rgba(255,255,255,.2)"></div>
+      <div style="text-align:center"><div style="font-size:24px;font-weight:900;color:#c4b5fd" id="sum-ctasks">—</div><div style="font-size:9px;color:rgba(255,255,255,.55);font-weight:800;text-transform:uppercase;letter-spacing:.08em">CTASKs</div></div>
+      <div style="margin-left:auto;text-align:right">
+        <div style="font-size:11px;color:rgba(255,255,255,.4)">Data Source</div>
+        <div style="font-size:13px;font-weight:800;color:#fff" id="sum-source">ServiceNow + Datadog</div>
+        <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:1px" id="exec-updated">Loading...</div>
+      </div>
+    </div>
+
+    <div class="kgrid">
+      <div class="kc c1" onclick="switchTab('dora')"><div class="kc-circle"></div><span class="kc-icon">&#128640;</span><div class="kc-label">Metric 1 &mdash; Deployment Frequency</div><span class="kc-value" id="kv-df">&ndash;</span><div class="kc-row"><span class="kc-badge" id="kl-df">&ndash;</span><span style="font-size:10px;color:rgba(0,0,0,.35)">Classification</span></div><div class="kc-desc" id="kd-df">Calculating from CMR data...</div><div class="kc-hint">&#8594; Click for full cluster breakdown</div></div>
+      <div class="kc c2" onclick="switchTab('dora')"><div class="kc-circle"></div><span class="kc-icon">&#9201;</span><div class="kc-label">Metric 2 &mdash; Lead Time for Changes</div><span class="kc-value" id="kv-lt">&ndash;</span><div class="kc-row"><span class="kc-badge" id="kl-lt">&ndash;</span><span style="font-size:10px;color:rgba(0,0,0,.35)">Classification</span></div><div class="kc-desc" id="kd-lt">From ServiceNow when available</div><div class="kc-hint">&#8594; Click for lead time details</div></div>
+      <div class="kc c3" onclick="switchTab('dora')"><div class="kc-circle"></div><span class="kc-icon">&#128737;</span><div class="kc-label">Metric 3 &mdash; Change Failure Rate</div><span class="kc-value" id="kv-cfr">&ndash;</span><div class="kc-row"><span class="kc-badge" id="kl-cfr">&ndash;</span><span style="font-size:10px;color:rgba(0,0,0,.35)">Classification &#9733;</span></div><div class="kc-desc" id="kd-cfr">Calculating...</div><div class="kc-hint">&#8594; Click for CFR &amp; incidents</div></div>
+      <div class="kc c4" onclick="switchTab('dora')"><div class="kc-circle"></div><span class="kc-icon">&#128295;</span><div class="kc-label">Metric 4 &mdash; Time to Restore (MTTR)</div><span class="kc-value" id="kv-mttr">&ndash;</span><div class="kc-row"><span class="kc-badge" id="kl-mttr">&ndash;</span><span style="font-size:10px;color:rgba(0,0,0,.35)">Classification</span></div><div class="kc-desc" id="kd-mttr">Calculating...</div><div class="kc-hint">&#8594; Click for MTTR detail</div></div>
+    </div>
+
+    <div class="g2">
+      <div class="card"><div class="ch">Deployments by Cluster <span class="cb" id="df-badge">Filtered</span></div><div class="cc h240"><canvas id="ov-c1"></canvas></div></div>
+      <div class="card"><div class="ch">Date-wise CMR Deployments <span class="cb" id="dw-badge">By range</span></div><div class="cc h240"><canvas id="ov-c2"></canvas></div></div>
+    </div>
+  </div>
+
+  <div id="tab-dora" class="tc">
+    <div class="sec">
+      <div class="shr"><span class="pil">Metric 1</span><div><div class="sti">Deployment Frequency</div><div class="ssu">Filtered from CMR dataset &middot; OCP production clusters &middot; Updates with time range</div></div></div>
+      <div class="g3">
+        <div class="card"><div class="ch">By Cluster <span class="cb">From filtered CMRs</span></div><div class="cc h240"><canvas id="dm-c1"></canvas></div></div>
+        <div class="card"><div class="ch">Date-wise Trend</div><div class="cc h240"><canvas id="dm-c2"></canvas></div></div>
+        <div class="card"><div class="ch">Top Projects in Range</div><div id="dm-ns"><div class="ldg">Loading...</div></div></div>
+      </div>
+    </div>
+    <div class="dvd"></div>
+    <div class="sec">
+      <div class="shr"><span class="pil w">Metric 2</span><div><div class="sti">Lead Time for Changes</div><div class="ssu">From ServiceNow planned start/end when available</div></div></div>
+      <div class="g21">
+        <div class="card"><div class="ch">Est. Duration by Complexity (hours)</div><div class="cc h240"><canvas id="dm-c3"></canvas></div></div>
+        <div class="card"><div class="ch">Top Complex CMRs (by component count)</div><div id="dm-slow"><div class="ldg">Loading...</div></div></div>
+      </div>
+    </div>
+    <div class="dvd"></div>
+    <div class="sec">
+      <div class="shr"><span class="pil s">Metric 3</span><div><div class="sti">Change Failure Rate</div><div class="ssu">Calculated from CMR incident data &middot; Updates with time range filter</div></div></div>
+      <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="scard"><div class="sac" style="background:var(--ok)"></div><div class="sv" id="cfr-val" style="color:var(--ok)">&ndash;</div><div class="sl">Change Failure Rate</div></div>
+        <div class="scard"><div class="sac" style="background:var(--br)"></div><div class="sv" id="cfr-total" style="color:var(--br)">&ndash;</div><div class="sl">Total CMRs</div></div>
+        <div class="scard" style="cursor:pointer" onclick="document.getElementById('dm-inc').scrollIntoView({behavior:'smooth'})"><div class="sac" style="background:var(--wn)"></div><div class="sv" id="cfr-issues" style="color:var(--wn)">&ndash;</div><div class="sl">Issues Observed &#8595;</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click to view &middot; Filter by INC / CTASK below</div></div>
+      </div>
+      <div class="card"><div class="ch">&#9888; Issues Observed &mdash; Post-Deployment (All Time) <span class="cb">INC + CTASK</span></div><div id="dm-inc"></div></div>
+    </div>
+    <div class="dvd"></div>
+    <div class="sec">
+      <div class="shr"><span class="pil p">Metric 4</span><div><div class="sti">Time to Restore (MTTR)</div><div class="ssu">From incident timeline &middot; Updates with time range filter</div></div></div>
+      <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="scard"><div class="sac" style="background:var(--pu)"></div><div class="sv" id="mttr-val" style="color:var(--pu)">&ndash;</div><div class="sl">Mean Time to Restore</div></div>
+        <div class="scard"><div class="sac" style="background:var(--er)"></div><div class="sv" id="mttr-issues" style="color:var(--er)">&ndash;</div><div class="sl">Rollbacks (Issues w/ Rollback)</div></div>
+        <div class="scard"><div class="sac" style="background:var(--ok)"></div><div class="sv" id="mttr-lvl" style="color:var(--ok)">&ndash;</div><div class="sl">Classification</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-cmr" class="tc">
+    <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="scard"><div class="sac" style="background:var(--br)"></div><div class="sv" style="color:var(--br)">&ndash;</div><div class="sl">CMRs in Range</div></div>
+      <div class="scard"><div class="sac" style="background:var(--ok)"></div><div class="sv" style="color:var(--ok)">&ndash;</div><div class="sl">Projects Covered</div></div>
+      <div class="scard"><div class="sac" style="background:var(--wn)"></div><div class="sv" style="color:var(--wn)">&ndash;</div><div class="sl">Issues Observed</div></div>
+    </div>
+    <div class="g2" style="margin-bottom:14px">
+      <div class="card"><div class="ch">Monthly CMR Trend</div><div class="cc h240"><canvas id="cmr-c1"></canvas></div></div>
+      <div class="card"><div class="ch">Top Projects in Selected Range</div><div class="cc h240"><canvas id="cmr-c2"></canvas></div></div>
+    </div>
+    <div class="card"><div class="ch">&#9888; Issues Observed <span class="cb">INC + CTASK</span></div><div id="cmr-inc"></div></div>
+  </div>
+
+  <div id="tab-projects" class="tc">
+    <div class="g12">
+      <div class="card">
+        <div class="ch">All Projects Summary <span class="cb" id="pg-badge">Page 1</span></div>
+        <table class="etbl"><thead><tr><th>#</th><th>Project</th><th>CMRs</th><th>Share</th><th>Status</th></tr></thead><tbody id="proj-body"></tbody></table>
+        <div class="pgn"><span class="pgi" id="pg-info">1&ndash;10</span><div class="pgb" id="pg-btns"></div></div>
+        <div class="othbox"><div class="othtitle">Projects with no CMRs in selected range</div><div class="othgrid" id="oth-grid"></div></div>
+      </div>
+      <div class="card"><div class="ch">CMR Distribution <span class="cb" id="proj-chart-badge">Filtered</span></div><div class="cc h360"><canvas id="proj-chart"></canvas></div></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="ch">&#128202; CMR Deployment Breakdown &mdash; Microservices &amp; Micro-Frontends per Change Request <span class="cb" id="detail-badge">Select a date</span></div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;padding:12px 14px;background:linear-gradient(135deg,#f4f7fb,#eef2ff);border-radius:10px;border:1px solid var(--bd2);flex-wrap:wrap">
+        <span style="font-size:11px;font-weight:700;color:var(--t3)">&#128197; Select Deployment Date</span>
+        <select class="fsl" id="cmr-date-sel" style="min-width:250px;height:34px;font-size:13px" onchange="loadCMRDetail(this.value)"><option value="">&mdash; Choose a Date &mdash;</option></select>
+        <span id="cmr-detail-summary" style="font-size:12px;color:var(--t2);font-weight:600"></span>
+        <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span style="font-size:10px;color:var(--t3)">Legend:</span>
+          <span style="font-size:10px;background:#3b5cf5;color:#fff;padding:2px 7px;border-radius:4px">MS</span>
+          <span style="font-size:10px;background:#22c55e;color:#fff;padding:2px 7px;border-radius:4px">MF</span>
+          <span style="font-size:10px;background:#f97316;color:#fff;padding:2px 7px;border-radius:4px">New MS &#9733;</span>
+          <span style="font-size:10px;background:#a855f7;color:#fff;padding:2px 7px;border-radius:4px">New MF &#9733;</span>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--t3);margin-bottom:10px">&#9432; Click &#9654; on any row to expand and see individual MS &amp; MF service names deployed in that CMR.</div>
+      <div id="cmr-detail-table"><div class="ldg">&#9432; Select a deployment date above to view the full MS &amp; MF breakdown per CMR.</div></div>
+      <div class="cc" style="height:240px;margin-top:14px"><canvas id="cmr-detail-chart"></canvas></div>
+      <div class="card" style="margin-top:14px">
+      <div class="ch">&#9733; New Microservices &amp; Micro-Frontends Registry <span class="cb" id="new-ms-badge">Loading</span></div>
+      <div style="background:#fff4e6;border:1px solid #f5dba0;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:11px;color:#7a4e00">
+        <strong>&#9432; New Service Tracker:</strong> New services returned from ServiceNow (when available). Empty until API returns data.
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap" id="new-ms-stats"></div>
+      <div id="new-ms-table"><div class="ldg">Loading new service data...</div></div>
+      <div class="cc" style="height:220px;margin-top:14px"><canvas id="new-ms-chart"></canvas></div>
+    </div>
+    </div>
+  </div>
+
+  <div id="tab-pipeline" class="tc">
+    <div class="card">
+      <div class="ch">CTASK Ops Metrics <span class="cb">Live from ServiceNow · click a card for details</span></div>
+      <div class="sgrid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('ctask')"><div class="sac" style="background:var(--br)"></div><div class="sv" id="m-ctask" style="color:var(--br)">—</div><div class="sl">CTASKs (OCP bin)</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click for CTASK list</div></div>
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('ocpchg')"><div class="sac" style="background:var(--ok)"></div><div class="sv" id="m-ocpchg" style="color:var(--ok)">—</div><div class="sl">CHGs under OCP</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Assigned to DIG-SOCE-SRE-OCP</div></div>
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('azkv')"><div class="sac" style="background:var(--wn)"></div><div class="sv" id="m-azkv" style="color:var(--wn)">—</div><div class="sl">Azure Key Vault CTASKs</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click for CTASK list</div></div>
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('3scale')"><div class="sac" style="background:var(--pu)"></div><div class="sv" id="m-3scale" style="color:var(--pu)">—</div><div class="sl">3scale request CTASKs</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click for CTASK list</div></div>
+      </div>
+      <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('pipeline')"><div class="sac" style="background:#2563eb"></div><div class="sv" id="m-pipeline" style="color:#2563eb">—</div><div class="sl">Pipeline running/executing CTASKs</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click for CTASK list</div></div>
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('kafka')"><div class="sac" style="background:#ea580c"></div><div class="sv" id="m-kafka" style="color:#ea580c">—</div><div class="sl">Kafka certificate CTASKs</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click for CTASK list</div></div>
+        <div class="scard" style="cursor:pointer" onclick="showOpsMetric('linked')"><div class="sac" style="background:#475569"></div><div class="sv" id="m-total-chg-link" style="color:#475569">—</div><div class="sl">CTASKs linked to CHG</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click for CTASK list</div></div>
+      </div>
+      <div class="ldg" id="pipe-empty" style="padding:14px 0 0">Loading...</div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="ch" id="ops-detail-title">CTASK Detail <span class="cb" id="ops-detail-badge">Select a metric above</span></div>
+      <div id="ops-detail-body"><div class="ldg">Click any metric card to see CTASK numbers, parent CHG, service, dates, assignee, and description.</div></div>
+    </div>
+  </div>
+
+</main>
+
+<footer class="ftr">
+  <span>IndiGo Airlines OCP Infrastructure</span><span>&middot;</span>
+  <span id="ftr-src">Live: ServiceNow (DIG-SOCE-SRE-OCP) + Datadog</span>
+  <span id="fts" style="margin-left:auto">&mdash;</span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
