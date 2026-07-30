@@ -227,6 +227,49 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
       <div class="card"><div class="ch">Deployments by Cluster <span class="cb" id="df-badge">Filtered</span></div><div class="cc h240"><canvas id="ov-c1"></canvas></div></div>
       <div class="card"><div class="ch">Date-wise CMR Deployments <span class="cb" id="dw-badge">By range</span></div><div class="cc h240"><canvas id="ov-c2"></canvas></div></div>
     </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="ch">OCP Bin Change Requests <span class="cb">Raised · assigned to DIG-SOCE-SRE-OCP</span></div>
+      <div class="sgrid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+        <div class="scard" style="cursor:pointer" onclick="setOcpChgFilter('kind','all')"><div class="sac" style="background:var(--ok)"></div><div class="sv" id="ov-ocpchg-total" style="color:var(--ok)">—</div><div class="sl">CHGs in OCP Bin</div></div>
+        <div class="scard" style="cursor:pointer" onclick="setOcpChgFilter('kind','middleware')"><div class="sac" style="background:var(--br)"></div><div class="sv" id="ov-ocpchg-mw" style="color:var(--br)">—</div><div class="sl">Middleware (OCP Changes) = Yes</div></div>
+        <div class="scard" style="cursor:pointer" onclick="setOcpChgFilter('kind','open')"><div class="sac" style="background:var(--wn)"></div><div class="sv" id="ov-ocpchg-open" style="color:var(--wn)">—</div><div class="sl">Open / In progress</div></div>
+        <div class="scard" style="cursor:pointer" onclick="setOcpChgFilter('kind','closed')"><div class="sac" style="background:var(--pu)"></div><div class="sv" id="ov-ocpchg-closed" style="color:var(--pu)">—</div><div class="sl">Closed</div></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px;padding:10px 12px;background:#f4f7fb;border:1px solid var(--bd2);border-radius:10px">
+        <div class="fg"><span class="fl">Filter</span>
+          <select class="fsl" id="ocpchg-kind" onchange="setOcpChgFilter('kind',this.value)" style="min-width:180px">
+            <option value="all">All CHGs (OCP Bin)</option>
+            <option value="middleware">Middleware OCP = Yes</option>
+            <option value="open">Open / In progress</option>
+            <option value="review">Review</option>
+            <option value="closed">Closed</option>
+            <option value="canceled">Canceled</option>
+          </select>
+        </div>
+        <div class="fg"><span class="fl">Requested by</span>
+          <select class="fsl" id="ocpchg-req" onchange="setOcpChgFilter('requestedBy',this.value)" style="min-width:200px">
+            <option value="">All people</option>
+          </select>
+        </div>
+        <div class="fg"><span class="fl">Risk</span>
+          <select class="fsl" id="ocpchg-risk" onchange="setOcpChgFilter('risk',this.value)" style="min-width:140px">
+            <option value="">All risk</option>
+          </select>
+        </div>
+        <div class="fg"><span class="fl">Configuration item</span>
+          <select class="fsl" id="ocpchg-ci" onchange="setOcpChgFilter('ci',this.value)" style="min-width:180px">
+            <option value="">All CIs</option>
+          </select>
+        </div>
+        <div class="fg" style="flex:1;min-width:220px"><span class="fl">Search</span>
+          <input class="fsl" id="ocpchg-q" type="search" placeholder="CHG#, CI, description, assignee…" oninput="setOcpChgFilter('q',this.value)" style="min-width:220px;width:100%;cursor:text">
+        </div>
+        <button class="btn" type="button" onclick="resetOcpChgFilters()" style="height:30px">Clear filters</button>
+      </div>
+      <div style="font-size:10px;color:var(--t3);margin-bottom:8px" id="ocpchg-hint">Live from ServiceNow · Assignment group DIG-SOCE-SRE-OCP · Click a row for full fields</div>
+      <div id="ov-ocpchg-body"><div class="ldg">Loading OCP Bin change requests...</div></div>
+    </div>
   </div>
 
   <div id="tab-dora" class="tc">

@@ -130,6 +130,33 @@ def snow_ocp_work():
         logger.exception("OCP work fetch failed")
         return jsonify({"error": str(e), "items": [], "ctask_count": 0}), 200
 
+@app.get("/api/snow/ocp-chgs")
+def snow_ocp_chgs():
+    """Change Requests assigned to OCP Bin (DIG-SOCE-SRE-OCP)."""
+    from_date = request.args.get("from_date", "2025-01-01")
+    to_date = request.args.get("to_date", None)
+    ag = request.args.get("assignment_group", "") or SNOW_AG
+    force = request.args.get("force_refresh", "false").lower() == "true"
+    ck = f"ocpchg::{from_date}::{to_date}::{ag}"
+    if not force:
+        cached = snow_cg(ck)
+        if cached:
+            cached = dict(cached)
+            cached["from_cache"] = True
+            return jsonify(cached)
+    if not snow.is_configured():
+        return jsonify({"error": "ServiceNow not configured", "items": [], "total": 0}), 200
+    try:
+        result = snow.fetch_ocp_bin_change_requests(
+            from_date=from_date, to_date=to_date, assignment_group=ag
+        )
+        result["from_cache"] = False
+        snow_cs(ck, result)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("OCP bin CHG fetch failed")
+        return jsonify({"error": str(e), "items": [], "total": 0}), 200
+
 @app.get("/api/snow/cmr-data")
 def snow_cmr_data():
     from_date = request.args.get("from_date", "2025-01-01")

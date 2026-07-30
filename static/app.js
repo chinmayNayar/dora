@@ -12,6 +12,8 @@ var OTH=[];
 var INC=[];
 var snowError='';
 var snowMeta={ctask_count:0, chg_count:0, items:[]};
+var OCP_BIN_CHGS=[]; // change_request assigned to DIG-SOCE-SRE-OCP
+var OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', q:''};
 
 Chart.defaults.color='#4a6070';Chart.defaults.borderColor='#dde5ef';Chart.defaults.font.family='Inter,sans-serif';
 var CH={},PG=1,PS=10,activeTab='overview';
@@ -332,7 +334,8 @@ function rOV(){
   var badge=document.getElementById('df-badge');if(badge)badge.textContent=isEmpty?'No CMRs in range':filtered.length+' CMRs filtered';
   var clData=buildClusterData(filtered);
   mkB('ov-c1',clData.map(function(x){return x.l;}),clData.map(function(x){return x.c;}),'#1a3acc');
-  var dw=buildDateWise(filtered);dC('ov-c2');var el2=document.getElementById('ov-c2');if(!el2)return;
+  var dw=buildDateWise(filtered);dC('ov-c2');var el2=document.getElementById('ov-c2');
+  if(!el2){ renderOcpBinChgs(); return; }
   if(isEmpty){
     var ctx=el2.getContext('2d');el2.width=el2.offsetWidth||600;el2.height=el2.offsetHeight||240;
     ctx.clearRect(0,0,el2.width,el2.height);ctx.fillStyle='#dde5ef';ctx.fillRect(0,0,el2.width,el2.height);
@@ -340,6 +343,7 @@ function rOV(){
     ctx.fillText('No CMR Deployments in Selected Range',el2.width/2,el2.height/2-14);
     ctx.font='12px Inter,sans-serif';
     ctx.fillText('No ServiceNow CMR data for this range',el2.width/2,el2.height/2+14);
+    renderOcpBinChgs();
     return;
   }
   CH['ov-c2']=new Chart(el2,{type:'bar',data:{labels:dw.labels,datasets:[
@@ -349,6 +353,214 @@ function rOV(){
     plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:10,font:{size:10}}}},
     scales:{x:{stacked:true,grid:{display:false},ticks:{color:'#4a6070',font:{size:9},maxRotation:45}},
             y:{stacked:true,beginAtZero:true,grid:{color:'#edf1f7'},ticks:{color:'#4a6070',font:{size:10},stepSize:1}}}}});
+  renderOcpBinChgs();
+}
+
+function getOcpBinByDate(){
+  var w=getDateWindow();
+  return (OCP_BIN_CHGS||[]).filter(function(ch){
+    if(!(w.from||w.to)) return true;
+    var start=parseDateOnly(ch.start_date||'');
+    var opened=parseDateOnly(ch.opened_at||'');
+    // Open/in-progress: keep if opened or start falls in range (planned start can be outside window)
+    if(isOcpChgOpen(ch)){
+      return inDateRange(opened||start, w.from||null, w.to||null)
+        || inDateRange(start||opened, w.from||null, w.to||null);
+    }
+    var d=start||opened;
+    if(!d) return false;
+    return inDateRange(d, w.from||null, w.to||null);
+  });
+}
+function ocpChgStateKey(st){
+  return String(st||'').trim().toLowerCase();
+}
+function isOcpChgOpen(ch){
+  var st=ocpChgStateKey(ch.state);
+  return st && st!=='closed' && st!=='canceled' && st!=='cancelled';
+}
+function isOcpChgMiddleware(ch){
+  return String(ch.middleware_ocp||'').trim().toLowerCase()==='yes';
+}
+function getFilteredOcpBinChgs(){
+  var list=getOcpBinByDate();
+  var kind=OCP_CHG_F.kind||'all';
+  var req=OCP_CHG_F.requestedBy||'';
+  var risk=OCP_CHG_F.risk||'';
+  var ci=OCP_CHG_F.ci||'';
+  var q=String(OCP_CHG_F.q||'').trim().toLowerCase();
+  return list.filter(function(ch){
+    var st=ocpChgStateKey(ch.state);
+    if(kind==='middleware' && !isOcpChgMiddleware(ch)) return false;
+    if(kind==='open' && !isOcpChgOpen(ch)) return false;
+    if(kind==='review' && st!=='review') return false;
+    if(kind==='closed' && st!=='closed') return false;
+    if(kind==='canceled' && st!=='canceled' && st!=='cancelled') return false;
+    if(req && String(ch.requested_by||'')!==req) return false;
+    if(risk && String(ch.risk||'')!==risk) return false;
+    if(ci && String(ch.configuration_item||'')!==ci) return false;
+    if(q){
+      var blob=[
+        ch.number, ch.short_description, ch.configuration_item, ch.state,
+        ch.requested_by, ch.opened_by, ch.assigned_to, ch.change_reason,
+        ch.outage, ch.middleware_ocp, ch.risk, ch.type, ch.assignment_group
+      ].join(' ').toLowerCase();
+      if(blob.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+}
+function fillOcpChgSelect(selId, fieldKey, allLabel, getValue){
+  var sel=document.getElementById(selId);
+  if(!sel) return;
+  var prev=OCP_CHG_F[fieldKey]||sel.value||'';
+  var values={};
+  getOcpBinByDate().forEach(function(ch){
+    var n=String(getValue(ch)||'').trim();
+    if(n) values[n]=1;
+  });
+  var sorted=Object.keys(values).sort(function(a,b){return a.localeCompare(b);});
+  sel.innerHTML='<option value="">'+allLabel+' ('+sorted.length+')</option>';
+  sorted.forEach(function(n){
+    var opt=document.createElement('option');
+    opt.value=n; opt.textContent=n;
+    sel.appendChild(opt);
+  });
+  if(prev && values[prev]) sel.value=prev;
+  else { sel.value=''; OCP_CHG_F[fieldKey]=''; }
+}
+function populateOcpChgDropdowns(){
+  fillOcpChgSelect('ocpchg-req', 'requestedBy', 'All people', function(ch){ return ch.requested_by; });
+  fillOcpChgSelect('ocpchg-risk', 'risk', 'All risk', function(ch){ return ch.risk; });
+  fillOcpChgSelect('ocpchg-ci', 'ci', 'All CIs', function(ch){ return ch.configuration_item; });
+}
+function setOcpChgFilter(key, val){
+  if(key==='kind') OCP_CHG_F.kind=val||'all';
+  else if(key==='requestedBy') OCP_CHG_F.requestedBy=val||'';
+  else if(key==='risk') OCP_CHG_F.risk=val||'';
+  else if(key==='ci') OCP_CHG_F.ci=val||'';
+  else if(key==='q') OCP_CHG_F.q=val||'';
+  var kindEl=document.getElementById('ocpchg-kind');
+  if(kindEl && key==='kind') kindEl.value=OCP_CHG_F.kind;
+  var reqEl=document.getElementById('ocpchg-req');
+  if(reqEl && key==='requestedBy') reqEl.value=OCP_CHG_F.requestedBy;
+  var riskEl=document.getElementById('ocpchg-risk');
+  if(riskEl && key==='risk') riskEl.value=OCP_CHG_F.risk;
+  var ciEl=document.getElementById('ocpchg-ci');
+  if(ciEl && key==='ci') ciEl.value=OCP_CHG_F.ci;
+  renderOcpBinChgs();
+}
+function resetOcpChgFilters(){
+  OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', q:''};
+  var kindEl=document.getElementById('ocpchg-kind'); if(kindEl) kindEl.value='all';
+  var reqEl=document.getElementById('ocpchg-req'); if(reqEl) reqEl.value='';
+  var riskEl=document.getElementById('ocpchg-risk'); if(riskEl) riskEl.value='';
+  var ciEl=document.getElementById('ocpchg-ci'); if(ciEl) ciEl.value='';
+  var qEl=document.getElementById('ocpchg-q'); if(qEl) qEl.value='';
+  renderOcpBinChgs();
+}
+function openOcpBinChgDetail(num){
+  var list=OCP_BIN_CHGS||[];
+  var ch=null;
+  for(var i=0;i<list.length;i++){ if(list[i].number===num){ ch=list[i]; break; } }
+  if(!ch){ openMod(num||'CHG','No detail found.'); return; }
+  var row=function(k,v){ return '<b>'+escHtml(k)+':</b> '+escHtml(v==null||v===''?'—':v)+'<br>'; };
+  var body=''
+    +row('Number', ch.number)
+    +row('Short description', ch.short_description)
+    +row('State', ch.state)+(ch.sub_state?row('Sub-State', ch.sub_state):'')
+    +row('Type', ch.type)
+    +row('Change Reason', ch.change_reason)
+    +row('Risk', ch.risk)
+    +row('Priority', ch.priority)
+    +row('Category', ch.category)
+    +row('Subcategory', ch.subcategory)
+    +row('Configuration item', ch.configuration_item)
+    +row('Assignment group', ch.assignment_group)
+    +row('Assigned to', ch.assigned_to)
+    +row('Requested by', ch.requested_by)
+    +row('Opened by', ch.opened_by)
+    +row('Opened at', ch.opened_at)
+    +row('Start date', ch.start_date)
+    +row('End date', ch.end_date)
+    +row('Conflict status', ch.conflict_status)
+    +row('Middleware (OCP Changes)', ch.middleware_ocp)
+    +row('Outage', ch.outage)
+    +row('Navitaire Impact', ch.navitaire_impact)
+    +row('Front End', ch.front_end)
+    +row('Database', ch.database)
+    +row('Web & Mobile impact', ch.web_mobile_impact)
+    +row('Backend change', ch.backend_change)
+    +row('Close code', ch.close_code)
+    +(ch.description
+      ? ('<b>Description:</b><pre style="white-space:pre-wrap;font-size:11px;background:#f4f7fb;padding:10px;border-radius:8px;margin-top:8px;max-height:240px;overflow:auto">'+escHtml(ch.description)+'</pre>')
+      : '');
+  openMod(ch.number+(ch.short_description?(' · '+String(ch.short_description).slice(0,60)):''), body);
+}
+function renderOcpBinChgs(){
+  populateOcpChgDropdowns();
+  var base=getOcpBinByDate();
+  var list=getFilteredOcpBinChgs();
+  var openN=0, closedN=0, mw=0, reviewN=0;
+  base.forEach(function(ch){
+    var st=ocpChgStateKey(ch.state);
+    if(st==='closed') closedN++;
+    else if(isOcpChgOpen(ch)) openN++;
+    if(st==='review') reviewN++;
+    if(isOcpChgMiddleware(ch)) mw++;
+  });
+  setEl('ov-ocpchg-total', String(base.length));
+  setEl('ov-ocpchg-mw', String(mw));
+  setEl('ov-ocpchg-open', String(openN));
+  setEl('ov-ocpchg-closed', String(closedN));
+  var hint=document.getElementById('ocpchg-hint');
+  if(hint){
+    hint.textContent='Showing '+list.length+' of '+base.length
+      +' in date range · Open/In progress: '+openN
+      +(reviewN?' · Review: '+reviewN:'')
+      +' · Filter: '+(OCP_CHG_F.kind||'all')
+      +(OCP_CHG_F.requestedBy?(' · Requested by: '+OCP_CHG_F.requestedBy):'')
+      +(OCP_CHG_F.risk?(' · Risk: '+OCP_CHG_F.risk):'')
+      +(OCP_CHG_F.ci?(' · CI: '+OCP_CHG_F.ci):'')
+      +(OCP_CHG_F.q?(' · Search: "'+OCP_CHG_F.q+'"'):'')
+      +' · Click row for full fields';
+  }
+  var body=document.getElementById('ov-ocpchg-body');
+  if(!body) return;
+  if(!list.length){
+    body.innerHTML='<div class="ldg">No change requests match the current filters. Try All available time range, or Clear filters.</div>';
+    return;
+  }
+  var h='<div style="overflow-x:auto;max-height:480px;overflow-y:auto"><table class="etbl"><thead><tr>'
+    +'<th>#</th><th>CHG</th><th>State</th><th>CI</th><th>Short description</th>'
+    +'<th>Middleware OCP</th><th>Requested by</th><th>Opened by</th><th>Assigned to</th>'
+    +'<th>Risk</th><th>Type</th><th>Change Reason</th><th>Outage</th><th>Start</th>'
+    +'</tr></thead><tbody>';
+  list.forEach(function(ch,idx){
+    var openBadge=isOcpChgOpen(ch)
+      ? '<span style="background:#ffedd5;color:#9a3412;padding:2px 6px;border-radius:4px;font-weight:700">'+escHtml(ch.state||'Open')+'</span>'
+      : escHtml(ch.state||'—');
+    h+='<tr style="cursor:pointer" onclick="openOcpBinChgDetail('+JSON.stringify(String(ch.number||''))+')">'
+      +'<td>'+(idx+1)+'</td>'
+      +'<td><span style="font-family:var(--fm);font-size:10px;color:var(--br);font-weight:700">'+escHtml(ch.number)+'</span></td>'
+      +'<td style="font-size:11px;font-weight:600">'+openBadge+'</td>'
+      +'<td style="font-size:11px;font-weight:600">'+escHtml(ch.configuration_item||'—')+'</td>'
+      +'<td style="font-size:11px;max-width:280px">'+escHtml(ch.short_description||'—')+'</td>'
+      +'<td style="font-size:11px;text-align:center">'+(isOcpChgMiddleware(ch)
+          ?'<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:4px;font-weight:700">Yes</span>'
+          :escHtml(ch.middleware_ocp||'—'))+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.requested_by||'—')+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.opened_by||'—')+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.assigned_to||'—')+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.risk||'—')+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.type||'—')+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.change_reason||'—')+'</td>'
+      +'<td style="font-size:11px">'+escHtml(ch.outage||'—')+'</td>'
+      +'<td style="font-size:10px;white-space:nowrap">'+escHtml((ch.start_date||ch.opened_at||'—').slice(0,16))+'</td>'
+      +'</tr>';
+  });
+  h+='</tbody></table></div>';
+  body.innerHTML=h;
 }
 
 // ── RENDER: DORA METRICS ─────────────────────────────────
@@ -905,7 +1117,7 @@ async function loadSnowData(){
   var lu=document.getElementById('lu');
   if(lu)lu.textContent='Loading ServiceNow...';
   snowError='';
-  CMR_DATA=[]; CMR_EXTRA=[]; NEW_MS_REGISTRY=[]; PRJ=[]; INC=[];
+  CMR_DATA=[]; CMR_EXTRA=[]; NEW_MS_REGISTRY=[]; PRJ=[]; INC=[]; OCP_BIN_CHGS=[];
   try{
     var data=await apiGet('/api/snow/cmr-data',{
       from_date:'2025-01-01',
@@ -915,25 +1127,41 @@ async function loadSnowData(){
     if(data.error){
       snowError=data.error;
       snowSource='none';
-      return false;
+    } else {
+      if(data.warning) snowError=data.warning;
+      CMR_DATA=Array.isArray(data.cmr_data)?data.cmr_data:[];
+      CMR_EXTRA=Array.isArray(data.cmr_extra)?data.cmr_extra:[];
+      INC=Array.isArray(data.incidents)?data.incidents:[];
+      NEW_MS_REGISTRY=Array.isArray(data.new_ms_registry)?data.new_ms_registry:[];
+      PRJ=Array.isArray(data.projects)?data.projects:[];
+      snowMeta={ctask_count:data.ctask_count||0, chg_count:data.chg_count||0, items:data.items||[]};
+      if(data.warning) snowError=data.warning;
+      if(data.permission_hint) snowError=data.permission_hint;
+      snowSource=CMR_DATA.length?'servicenow':'none';
+      console.log('ServiceNow:',CMR_DATA.length,'CMRs', snowMeta.ctask_count,'CTASKs', data.warning||'');
     }
-    if(data.warning) snowError=data.warning;
-    CMR_DATA=Array.isArray(data.cmr_data)?data.cmr_data:[];
-    CMR_EXTRA=Array.isArray(data.cmr_extra)?data.cmr_extra:[];
-    INC=Array.isArray(data.incidents)?data.incidents:[];
-    NEW_MS_REGISTRY=Array.isArray(data.new_ms_registry)?data.new_ms_registry:[];
-    PRJ=Array.isArray(data.projects)?data.projects:[];
-    snowMeta={ctask_count:data.ctask_count||0, chg_count:data.chg_count||0, items:data.items||[]};
-    if(data.warning) snowError=data.warning;
-    if(data.permission_hint) snowError=data.permission_hint;
-    snowSource=CMR_DATA.length?'servicenow':'none';
-    console.log('ServiceNow:',CMR_DATA.length,'CMRs', snowMeta.ctask_count,'CTASKs', data.warning||'');
-    return CMR_DATA.length>0;
   }catch(e){
     snowError=e.message||String(e);
     snowSource='none';
-    return false;
   }
+
+  try{
+    var chgData=await apiGet('/api/snow/ocp-chgs',{
+      from_date:'2025-01-01',
+      assignment_group:'DIG-SOCE-SRE-OCP',
+      force_refresh:'false'
+    });
+    if(chgData&&!chgData.error){
+      OCP_BIN_CHGS=Array.isArray(chgData.items)?chgData.items:[];
+      console.log('OCP Bin CHGs:', OCP_BIN_CHGS.length);
+    } else if(chgData&&chgData.error){
+      console.log('OCP Bin CHGs error:', chgData.error);
+    }
+  }catch(e){
+    console.log('OCP Bin CHGs:', e.message||e);
+  }
+
+  return CMR_DATA.length>0 || OCP_BIN_CHGS.length>0;
 }
 
 // ── LOAD LIVE — Datadog infra only (no fake numbers) ─────

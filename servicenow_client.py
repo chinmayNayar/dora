@@ -395,6 +395,110 @@ class ServiceNowClient:
         self._last_ocp_bundle = bundle
         return bundle
 
+    def fetch_ocp_bin_change_requests(
+        self,
+        from_date: str = "2025-01-01",
+        to_date: Optional[str] = None,
+        assignment_group: str = "DIG-SOCE-SRE-OCP",
+    ) -> Dict[str, Any]:
+        """
+        Change Requests assigned to OCP Bin (DIG-SOCE-SRE-OCP).
+        Fields match Indigo Fulfiller form (Middleware OCP, CI, opened/requested by, etc.).
+        """
+        if to_date is None:
+            to_date = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+        gid = self._group_sys_id(assignment_group)
+        fields = [
+            "number", "short_description", "description",
+            "state", "type", "risk", "priority", "category",
+            "cmdb_ci", "assignment_group", "assigned_to",
+            "opened_by", "requested_by", "opened_at",
+            "start_date", "end_date", "work_start", "work_end",
+            "close_code", "conflict_status", "user_input",
+            "u_subcategory", "u_db_change",
+            "x_kpmg3_pit_change_u_middleware_ocp",
+            "x_kpmg3_pit_change_u_outage",
+            "x_kpmg3_pit_change_u_navitaire_impact",
+            "x_kpmg3_pit_change_u_fronend_change",
+            "x_kpmg3_pit_change_u_front_end",
+            "x_kpmg3_pit_change_u_change_have_impact",
+            "x_kpmg3_pit_change_u_backend_change",
+            "x_kpmg3_pit_change_sub_state",
+        ]
+        try:
+            rows = self._table_get("change_request", {
+                "sysparm_query": f"assignment_group={gid}^ORDERBYDESCopened_at",
+                "sysparm_fields": ",".join(fields),
+                "sysparm_display_value": "true",
+                "sysparm_exclude_reference_link": "true",
+            })
+            query_error = None
+        except Exception as e:
+            rows = []
+            query_error = str(e)
+            logger.exception("fetch_ocp_bin_change_requests failed")
+
+        items = []
+        for r in rows:
+            opened = self._dv(r.get("opened_at"))
+            start = self._dv(r.get("start_date")) or self._dv(r.get("work_start")) or opened
+            if not self._in_date_range(start or opened or "9999-99-99", from_date, to_date):
+                # Prefer planned start; fall back to opened_at for date window
+                if not self._in_date_range(opened or "9999-99-99", from_date, to_date):
+                    continue
+            front = (
+                self._dv(r.get("x_kpmg3_pit_change_u_fronend_change"))
+                or self._dv(r.get("x_kpmg3_pit_change_u_front_end"))
+                or ""
+            )
+            items.append({
+                "number": self._dv(r.get("number")),
+                "short_description": self._dv(r.get("short_description")),
+                "description": self._dv(r.get("description")),
+                "state": self._dv(r.get("state")),
+                "sub_state": self._dv(r.get("x_kpmg3_pit_change_sub_state")),
+                "type": self._dv(r.get("type")),
+                "risk": self._dv(r.get("risk")),
+                "priority": self._dv(r.get("priority")),
+                "category": self._dv(r.get("category")),
+                "subcategory": self._dv(r.get("u_subcategory")),
+                "configuration_item": self._dv(r.get("cmdb_ci")),
+                "assignment_group": self._dv(r.get("assignment_group")) or assignment_group,
+                "assigned_to": self._dv(r.get("assigned_to")),
+                "opened_by": self._dv(r.get("opened_by")),
+                "requested_by": self._dv(r.get("requested_by")),
+                "opened_at": opened,
+                "start_date": self._dv(r.get("start_date")),
+                "end_date": self._dv(r.get("end_date")),
+                "close_code": self._dv(r.get("close_code")),
+                "conflict_status": self._dv(r.get("conflict_status")),
+                "change_reason": self._dv(r.get("user_input")),
+                "middleware_ocp": self._dv(r.get("x_kpmg3_pit_change_u_middleware_ocp")),
+                "outage": self._dv(r.get("x_kpmg3_pit_change_u_outage")),
+                "navitaire_impact": self._dv(r.get("x_kpmg3_pit_change_u_navitaire_impact")),
+                "front_end": front,
+                "database": self._dv(r.get("u_db_change")),
+                "web_mobile_impact": self._dv(r.get("x_kpmg3_pit_change_u_change_have_impact")),
+                "backend_change": self._dv(r.get("x_kpmg3_pit_change_u_backend_change")),
+            })
+
+        mw_yes = sum(1 for i in items if str(i.get("middleware_ocp", "")).lower() == "yes")
+        return {
+            "assignment_group": assignment_group,
+            "total": len(items),
+            "middleware_ocp_yes": mw_yes,
+            "items": items,
+            "from_date": from_date,
+            "to_date": to_date,
+            "fetched_at": datetime.now(tz=timezone.utc).isoformat(),
+            "query_error": query_error,
+            "permission_hint": (
+                f"ServiceNow query error: {query_error}" if query_error
+                else (None if items else f"No change_request rows for {assignment_group} in range.")
+            ),
+        }
+
     def fetch_change_requests(self, from_date: str = "2025-01-01",
                                to_date: Optional[str] = None,
                                assignment_group: Optional[str] = None) -> List[Dict]:
