@@ -28,7 +28,7 @@ OCP = ["ocpappprdclu2", "ssocpappprdclu", "ocpappprdclu", "ocpintprdclu2", "ocpi
 CLEV = "(" + " OR ".join(f"kube_cluster:{c}" for c in OCP) + ")"
 ENVMX = "env:prod OR env:prod2 OR env:drprod"
 BASE_MX = ENVMX
-DAYS = {"now-24h": 1, "now-7d": 7, "now-30d": 30, "now-90d": 90}
+DAYS = {"now-24h": 1, "now-2d": 2, "now-7d": 7, "now-14d": 14, "now-30d": 30, "now-90d": 90}
 
 snow = ServiceNowClient()
 _snow_cache: Dict[str, Any] = {}
@@ -163,18 +163,63 @@ def snow_cmr_data():
     to_date = request.args.get("to_date", None)
     ag = request.args.get("assignment_group", "") or SNOW_AG
     force = request.args.get("force_refresh", "false").lower() == "true"
-    ck = f"snow::{from_date}::{to_date}::{ag}"
+    ck = f"snow::v5::{from_date}::{to_date}::{ag}"
     if not force:
         cached = snow_cg(ck)
-        if cached: cached["from_cache"] = True; return jsonify(cached)
+        if cached:
+            out = dict(cached)
+            out["from_cache"] = True
+            return jsonify(out)
     if not snow.is_configured():
         return jsonify({"error": "ServiceNow not configured", "cmr_data": [], "total": 0}), 200
     try:
         records = snow.fetch_change_requests(from_date=from_date, to_date=to_date, assignment_group=ag or None)
         result = snow.transform_to_dashboard_format(records)
+        # Overall IndiGo: all DIG-* CHG close_code failures (Metric 3)
+        indigo = snow.fetch_indigo_close_failures(from_date=from_date, to_date=to_date)
+        result = snow.merge_indigo_failures(result, indigo)
         result["assignment_group"] = ag
         if result["total"] == 0 and result.get("permission_hint"):
             result["warning"] = result["permission_hint"]
+        # Overall IndiGo cluster + DIG group classification
+        by_cl = {}
+        by_ag = {}
+        for r in result.get("cmr_data") or []:
+            cl = r.get("c") or "unknown"
+            slot = by_cl.setdefault(cl, {"total": 0, "failures": 0, "unsuccessful": 0, "with_issues": 0})
+            slot["total"] += 1
+            if r.get("i"):
+                slot["failures"] += 1
+                if r.get("fk") == "unsuccessful" or r.get("r"):
+                    slot["unsuccessful"] += 1
+                elif r.get("fk") == "with_issues":
+                    slot["with_issues"] += 1
+        for inc in result.get("incidents") or []:
+            agn = inc.get("assignment_group") or ("DIG-SOCE-SRE-OCP" if "ctask" in str(inc.get("source") or "") else "DIG")
+            g = by_ag.setdefault(agn, {"failures": 0, "unsuccessful": 0, "with_issues": 0})
+            g["failures"] += 1
+            if inc.get("fail_kind") == "unsuccessful" or inc.get("rb"):
+                g["unsuccessful"] += 1
+            elif inc.get("fail_kind") == "with_issues":
+                g["with_issues"] += 1
+        result["overall_indigo"] = {
+            "label": "Overall IndiGo · OCP CTASKs + all DIG-* close_code failures",
+            "total_cmrs": result.get("total", 0),
+            "total_ctasks": result.get("ctask_count", 0),
+            "failures": (result.get("failure_stats") or {}).get("total_failures", 0),
+            "indigo_close_failures": (result.get("indigo_failures") or {}).get("total", 0),
+            "by_cluster": by_cl,
+            "by_assignment_group": by_ag,
+            "close_code_stats": result.get("close_code_stats"),
+        }
+        result["issue_sheet"] = {
+            "loaded": False,
+            "source": "servicenow_live",
+            "note": (
+                "Metric 3 = OCP CTASK/CMR close_code + Overall IndiGo DIG-* CHG "
+                "Unsuccessful / Successful with issues. Time filter uses close/activity date."
+            ),
+        }
         result["from_cache"] = False
         snow_cs(ck, result)
         return jsonify(result)

@@ -147,7 +147,7 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
   
   <div class="fsep"></div>
   <div class="fg"><span class="fl">Cluster</span>
-    <select class="fsl" id="f-cluster">
+    <select class="fsl" id="f-cluster" onchange="applyF()">
       <option value="">All Clusters</option>
       <option value="ocpappprdclu2">ocpappprdclu2</option>
       <option value="ssocpappprdclu">ssocpappprdclu</option>
@@ -158,20 +158,20 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
   </div>
   <div class="fsep"></div>
   <div class="fg"><span class="fl">Time Range</span>
-    <select class="fsl" id="f-time" onchange="toggleCustomDateInputs()">
+    <select class="fsl" id="f-time" onchange="onTimeRangeChange()">
       <option value="now-24h">Last 24 Hours</option>
       <option value="now-2d">Last 2 Days</option>
       <option value="now-7d">Last 7 Days</option>
       <option value="now-14d">Last 14 Days</option>
-      <option value="now-30d">Last 30 Days</option>
+      <option value="now-30d" selected>Last 30 Days</option>
       <option value="now-90d">Last 90 Days</option>
-      <option value="all" selected>All available</option>
+      <option value="all">All available</option>
       <option value="custom">Custom range</option>
     </select>
   </div>
   <div class="fg" id="custom-date-wrap" style="display:none;gap:6px">
-    <span class="fl">From</span><input class="fsl" id="f-from" type="date" style="min-width:150px">
-    <span class="fl">To</span><input class="fsl" id="f-to" type="date" style="min-width:150px">
+    <span class="fl">From</span><input class="fsl" id="f-from" type="date" style="min-width:150px" onchange="applyF()">
+    <span class="fl">To</span><input class="fsl" id="f-to" type="date" style="min-width:150px" onchange="applyF()">
   </div>
   <button class="fok" onclick="applyF()">Apply</button>
   <span class="lu" id="lu">Initializing...</span>
@@ -211,7 +211,7 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
       <div style="text-align:center"><div style="font-size:24px;font-weight:900;color:#c4b5fd" id="sum-ctasks">—</div><div style="font-size:9px;color:rgba(255,255,255,.55);font-weight:800;text-transform:uppercase;letter-spacing:.08em">CTASKs</div></div>
       <div style="margin-left:auto;text-align:right">
         <div style="font-size:11px;color:rgba(255,255,255,.4)">Data Source</div>
-        <div style="font-size:13px;font-weight:800;color:#fff" id="sum-source">ServiceNow + Datadog</div>
+        <div style="font-size:13px;font-weight:800;color:#fff" id="sum-source">ServiceNow live</div>
         <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:1px" id="exec-updated">Loading...</div>
       </div>
     </div>
@@ -291,17 +291,19 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
     </div>
     <div class="dvd"></div>
     <div class="sec">
-      <div class="shr"><span class="pil s">Metric 3</span><div><div class="sti">Change Failure Rate</div><div class="ssu">Calculated from CMR incident data &middot; Updates with time range filter</div></div></div>
-      <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="shr"><span class="pil s">Metric 3</span><div><div class="sti">Change Failure Rate</div><div class="ssu">Overall IndiGo (All Clusters) &middot; Live ServiceNow close_code &middot; Filtered by <b>close/activity date</b> (not only planned start)</div></div></div>
+      <div class="sgrid" style="grid-template-columns:repeat(5,1fr)">
         <div class="scard"><div class="sac" style="background:var(--ok)"></div><div class="sv" id="cfr-val" style="color:var(--ok)">&ndash;</div><div class="sl">Change Failure Rate</div></div>
         <div class="scard"><div class="sac" style="background:var(--br)"></div><div class="sv" id="cfr-total" style="color:var(--br)">&ndash;</div><div class="sl">Total CMRs</div></div>
-        <div class="scard" style="cursor:pointer" onclick="document.getElementById('dm-inc').scrollIntoView({behavior:'smooth'})"><div class="sac" style="background:var(--wn)"></div><div class="sv" id="cfr-issues" style="color:var(--wn)">&ndash;</div><div class="sl">Issues Observed &#8595;</div><div style="font-size:9px;color:var(--t3);margin-top:4px">Click to view &middot; Filter by INC / CTASK below</div></div>
+        <div class="scard" style="cursor:pointer" onclick="setIncFilter('all')"><div class="sac" style="background:var(--wn)"></div><div class="sv" id="cfr-issues" style="color:var(--wn)">&ndash;</div><div class="sl">All Failures &#8595;</div></div>
+        <div class="scard" style="cursor:pointer" onclick="setIncFilter('unsuccessful')"><div class="sac" style="background:var(--er)"></div><div class="sv" id="cfr-unsuccessful" style="color:var(--er)">&ndash;</div><div class="sl">Unsuccessful / Rollback</div></div>
+        <div class="scard" style="cursor:pointer" onclick="setIncFilter('with_issues')"><div class="sac" style="background:#f59e0b"></div><div class="sv" id="cfr-with-issues" style="color:#b45309">&ndash;</div><div class="sl">Successful with issues</div></div>
       </div>
-      <div class="card"><div class="ch">&#9888; Issues Observed &mdash; Post-Deployment (All Time) <span class="cb">INC + CTASK</span></div><div id="dm-inc"></div></div>
+      <div class="card"><div class="ch">&#9888; Failures &amp; Issues &mdash; live from ServiceNow <span class="cb">close_code · CTASK · CMR · Rollback</span></div><div id="dm-inc"></div></div>
     </div>
     <div class="dvd"></div>
     <div class="sec">
-      <div class="shr"><span class="pil p">Metric 4</span><div><div class="sti">Time to Restore (MTTR)</div><div class="ssu">From incident timeline &middot; Updates with time range filter</div></div></div>
+      <div class="shr"><span class="pil p">Metric 4</span><div><div class="sti">Time to Restore (MTTR)</div><div class="ssu">Avg ServiceNow planned/work window on failed CHGs &middot; Updates with time range</div></div></div>
       <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
         <div class="scard"><div class="sac" style="background:var(--pu)"></div><div class="sv" id="mttr-val" style="color:var(--pu)">&ndash;</div><div class="sl">Mean Time to Restore</div></div>
         <div class="scard"><div class="sac" style="background:var(--er)"></div><div class="sv" id="mttr-issues" style="color:var(--er)">&ndash;</div><div class="sl">Rollbacks (Issues w/ Rollback)</div></div>
@@ -382,13 +384,25 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
       <div class="ch" id="ops-detail-title">CTASK Detail <span class="cb" id="ops-detail-badge">Select a metric above</span></div>
       <div id="ops-detail-body"><div class="ldg">Click any metric card to see CTASK numbers, parent CHG, service, dates, assignee, and description.</div></div>
     </div>
+    <div class="g2" style="margin-top:14px">
+      <div class="card">
+        <div class="ch">Stage-by-Stage Breakdown <span class="cb">Ops playbook reference · not ServiceNow metrics</span></div>
+        <table class="etbl"><thead><tr><th>#</th><th>Stage</th><th>Checks</th><th>Est. Time</th><th>Failure Mode</th></tr></thead><tbody id="pipe-body"></tbody></table>
+      </div>
+      <div class="card">
+        <div class="ch">3Scale Configuration <span class="cb">Playbook steps · not live metrics</span></div>
+        <table class="etbl" style="margin-bottom:16px"><thead><tr><th>Step</th><th>Duration</th><th>Per CMR</th></tr></thead><tbody id="scale-body"></tbody></table>
+        <div class="ch" style="margin-bottom:10px">Stage Duration (min)</div>
+        <div class="cc h180"><canvas id="pipe-chart"></canvas></div>
+      </div>
+    </div>
   </div>
 
 </main>
 
 <footer class="ftr">
   <span>IndiGo Airlines OCP Infrastructure</span><span>&middot;</span>
-  <span id="ftr-src">Live: ServiceNow (DIG-SOCE-SRE-OCP) + Datadog</span>
+  <span id="ftr-src">Live: ServiceNow only (DIG-SOCE-SRE-OCP) · Datadog infra</span>
   <span id="fts" style="margin-left:auto">&mdash;</span>
 </footer>
 

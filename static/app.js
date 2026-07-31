@@ -15,6 +15,27 @@ var snowMeta={ctask_count:0, chg_count:0, items:[]};
 var OCP_BIN_CHGS=[]; // change_request assigned to DIG-SOCE-SRE-OCP
 var OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', q:''};
 
+// Pipeline reference data (ops playbook — keep on Pipeline tab; not from ServiceNow)
+var PD=[
+  {s:1,n:'Pipeline Execution',   ch:'Variables, approvals, logs',       et:'7-10 min',em:8,  fm:'Abort/timeout'},
+  {s:2,n:'3Scale Configuration', ch:'Routes, policies, backend mapping', et:'~14 min', em:14, fm:'Route missing'},
+  {s:3,n:'Azure Key Vault',      ch:'Secrets, access policies, sync',   et:'10 min',  em:10, fm:'Sync failure'},
+  {s:4,n:'ArgoCD Sync',          ch:'Sync status, health, drift',       et:'5 min',   em:5,  fm:'Health Degraded'},
+  {s:5,n:'GitHub Changes',       ch:'PR merge, branch, config values',  et:'10 min',  em:10, fm:'Build blocked'},
+  {s:6,n:'Branch Conflict',      ch:'Common branches cannot merge',     et:'10 min',  em:10, fm:'Merge conflict'},
+  {s:7,n:'Jenkins Setup',        ch:'Jenkinsfile ready (future)',        et:'15 min',  em:15, fm:'Build error'},
+  {s:8,n:'New Service Setup',    ch:'Manifest, Deploy Config, 3Scale',  et:'~2 hrs',  em:120,fm:'Multiple failures'},
+  {s:9,n:'Multi-pipeline Race',  ch:'Simultaneous commits not updated', et:'10 min',  em:10, fm:'Stale commit'}
+];
+var SD=[
+  {st:'User Key Setup',d:'1 min/key (5 min total)',p:'1 product'},
+  {st:'Onboarding',d:'1.5 min/mapping',p:'1 product'},
+  {st:'Policies',d:'5 min',p:'1 product'},
+  {st:'Backend Mapping',d:'3 min',p:'1 product'},
+  {st:'Rate Limiting',d:'2 min',p:'1 product'},
+  {st:'Testing',d:'5 min',p:'1 product'}
+];
+
 Chart.defaults.color='#4a6070';Chart.defaults.borderColor='#dde5ef';Chart.defaults.font.family='Inter,sans-serif';
 var CH={},PG=1,PS=10,activeTab='overview';
 var CMAP={app:'ocpappprdclu',ap2:'ocpappprdclu2',sso:'ssocpappprdclu',int:'ocpintprdclu',in2:'ocpintprdclu2'};
@@ -35,59 +56,124 @@ function toggleCustomDateInputs(){
   if(!fr||!wrap) return;
   wrap.style.display = fr.value==='custom' ? 'flex' : 'none';
 }
+function onTimeRangeChange(){
+  toggleCustomDateInputs();
+  // Selecting Custom just reveals pickers; apply once From/To change or Apply is clicked
+  var fr=document.getElementById('f-time');
+  if(fr && fr.value==='custom') return;
+  applyF();
+}
+function daysAgoIST(days){
+  var today=todayIST();
+  var p=today.split('-').map(Number);
+  var dt=new Date(Date.UTC(p[0], p[1]-1, p[2]));
+  dt.setUTCDate(dt.getUTCDate()-Math.max(0, days|0));
+  return dt.toISOString().slice(0,10);
+}
 function getDateWindow(){
-  var fr=F?F.fr:'all';
+  // Always read live controls so every tab uses the same window (even before Apply)
+  var f=getF();
+  var fr=f.fr||'all';
   if(fr==='custom'){
-    return {from:F.from||'', to:F.to||todayIST()};
+    return {from:f.from||'', to:f.to||todayIST()};
   }
   if(fr==='all') return {from:'',to:''};
   var days=DAYS[fr]||30;
-  var c=new Date();
-  c.setDate(c.getDate()-days);
-  return {from:c.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'}), to:todayIST()};
+  return {from:daysAgoIST(days), to:todayIST()};
+}
+function passesDateWindow(dateStr){
+  var w=getDateWindow();
+  if(!(w.from||w.to)) return true; // All available
+  var d=parseDateOnly(dateStr||'');
+  if(!d) return false;
+  return inDateRange(d, w.from||null, w.to||null);
+}
+function activeClusterCode(){
+  var clFilter=(getF().cl)||'';
+  if(!clFilter) return '';
+  for(var k in CMAP){if(CMAP[k]===clFilter) return k;}
+  return '';
 }
 function getFilteredSnowItems(){
   var items=(snowMeta&&snowMeta.items)||[];
   var w=getDateWindow();
+  if(!(w.from||w.to)) return items.slice();
   return items.filter(function(it){
-    var d=parseDateOnly(it.start||it.planned_start||'');
-    return inDateRange(d,w.from,w.to||todayIST());
+    return passesDateWindow(it.start||it.planned_start||'');
   });
 }
 function getFilteredCMR(){
-  var today=todayIST(), fr=F?F.fr:'now-30d';
-  var clFilter=F?F.cl:'';
-
-  // Reverse map: full cluster name → short code (app, ap2, sso, int, in2)
-  var clCode='';
-  if(clFilter){
-    for(var k in CMAP){if(CMAP[k]===clFilter){clCode=k;break;}}
-  }
-
-  var from='',to='';
-  if(fr==='custom'){
-    from=(F&&F.from)||'';
-    to=(F&&F.to)||today;
-  }else if(fr!=='all'){
-    var days=DAYS[fr]||30, cutoff=new Date();
-    cutoff.setDate(cutoff.getDate()-days);
-    from=cutoff.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'});
-    to=today;
-  }
-
+  var today=todayIST();
+  var clCode=activeClusterCode();
+  var w=getDateWindow();
   return CMR_DATA.filter(function(r){
-    if(r.d>today) return false;
+    var start=r.d||'';
+    var act=r.ad||r.cd||r.d||'';
+    // Drop pure future-planned with no activity yet
+    if(start>today && (!act || act>today)) return false;
     if(clCode && r.c!==clCode) return false;
-    if(from && r.d<from) return false;
-    if(to && r.d>to) return false;
-    return true;
+    if(!(w.from||w.to)) return true;
+    // Overall IndiGo Last N days: match planned start OR close/activity date
+    return passesDateWindow(start) || passesDateWindow(act);
+  });
+}
+function getFilteredChgSet(){
+  var set={};
+  var w=getDateWindow();
+  var clCode=activeClusterCode();
+  var today=todayIST();
+  CMR_DATA.forEach(function(r,idx){
+    var start=r.d||'';
+    var act=r.ad||r.cd||r.d||'';
+    if(start>today && (!act || act>today)) return;
+    if(clCode && r.c!==clCode) return;
+    if((w.from||w.to) && !(passesDateWindow(start) || passesDateWindow(act))) return;
+    var ex=(CMR_EXTRA&&CMR_EXTRA[idx])||{};
+    if(ex.chg) set[String(ex.chg).toUpperCase()]=1;
+  });
+  return set;
+}
+function getFilteredNewMS(){
+  var w=getDateWindow();
+  var clCode=activeClusterCode();
+  return (NEW_MS_REGISTRY||[]).filter(function(entry){
+    if(clCode && entry.cl && entry.cl!==clCode) return false;
+    if(!(w.from||w.to)) return true;
+    return passesDateWindow(entry.d||'');
+  });
+}
+function parseDisplayDate(s){
+  if(!s) return '';
+  var raw=String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0,10);
+  // "12 May 2026" / "12 May, 2026"
+  var m=raw.replace(/,/g,'').match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if(!m) return '';
+  var months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  var mi=months[m[2].slice(0,3).toLowerCase()];
+  if(!mi) return '';
+  var dd=String(m[1]).padStart(2,'0'), mm=String(mi).padStart(2,'0');
+  return m[3]+'-'+mm+'-'+dd;
+}
+function getFilteredIncidents(){
+  var list=INC||[];
+  var w=getDateWindow();
+  if(!(w.from||w.to) && !(F&&F.cl)) return list.slice();
+  var chgs=getFilteredChgSet();
+  return list.filter(function(inc){
+    var nums=String(inc.ch||'').toUpperCase().match(/CHG\d+/g)||[];
+    if(nums.length && nums.some(function(n){return !!chgs[n];})) return true;
+    var d=parseDisplayDate(inc.dt);
+    if(!d) return !(w.from||w.to); // no date + all range
+    return passesDateWindow(d);
   });
 }
 function calcDORA(filtered){
-  var fr=F?F.fr:'now-30d';
+  var f=F||getF();
+  var fr=f.fr||'now-30d';
   var days=DAYS[fr]||30;
   if(fr==='custom'){
-    var from=(F&&F.from)||todayIST(), to=(F&&F.to)||todayIST();
+    var from=f.from||todayIST(), to=f.to||todayIST();
     var a=new Date(from+'T00:00:00+05:30'), b=new Date(to+'T00:00:00+05:30');
     days=Math.max(1, Math.round((b-a)/86400000)+1);
   }else if(fr==='all'){
@@ -100,7 +186,13 @@ function calcDORA(filtered){
   var total=filtered.length,perDay=days>0?total/days:0;
   var incs=filtered.filter(function(r){return r.i;}),rbs=filtered.filter(function(r){return r.r;});
   var cfr=total>0?(incs.length/total*100):0;
-  var mttrH=incs.length>0?incs.reduce(function(a,r){return a+(r.m||0);},0)/incs.length:0;
+  // MTTR from live ServiceNow planned/work windows on failed CMRs (field m)
+  var mttrSum=0, mttrN=0;
+  incs.forEach(function(r){
+    var h=Number(r.m)||0;
+    if(h>0){ mttrSum+=h; mttrN++; }
+  });
+  var mttrH=mttrN>0?(mttrSum/mttrN):0;
   var dfLvl,dfLbl;
   if(total===0){dfLvl='N/A';dfLbl='—';}
   else if(perDay>=1){dfLvl='Elite';dfLbl=perDay.toFixed(1)+'/day';}
@@ -139,11 +231,12 @@ function buildDateWise(filtered){
   var labels=[],ok=[],fail=[],dm={};
   filtered.forEach(function(r){if(!dm[r.d])dm[r.d]={ok:0,fail:0};if(r.i)dm[r.d].fail++;else dm[r.d].ok++;});
   var w=getDateWindow();
-  var from=w.from, to=w.to||todayIST();
+  var from=w.from, to=w.to;
   if(!from){
     if(filtered.length) from=filtered.map(function(r){return r.d;}).sort()[0];
-    else from=to;
+    else from=todayIST();
   }
+  if(!to) to=todayIST();
   var start=new Date(from+'T00:00:00+05:30');
   var end=new Date(to+'T00:00:00+05:30');
   for(var d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
@@ -155,9 +248,24 @@ function buildDateWise(filtered){
   return{labels:labels,ok:ok,fail:fail};
 }
 function buildMonthWise(filtered){
-  var MIDX={'01':0,'02':1,'03':2,'04':3,'05':4,'06':5,'07':6},counts=[0,0,0,0,0,0,0],incs=[0,0,0,0,0,0,0];
-  filtered.forEach(function(r){var m=r.d.substring(5,7),i=MIDX[m];if(i!==undefined){counts[i]++;if(r.i)incs[i]++;}});
- return{labels:["Jan '26","Feb '26","Mar '26","Apr '26","May '26","Jun '26","Jul '26"],counts:counts,incidents:incs};
+  var monthMap={};
+  filtered.forEach(function(r){
+    var key=(r.d||'').substring(0,7);
+    if(!/^\d{4}-\d{2}$/.test(key)) return;
+    if(!monthMap[key]) monthMap[key]={counts:0,incidents:0};
+    monthMap[key].counts++;
+    if(r.i) monthMap[key].incidents++;
+  });
+  var keys=Object.keys(monthMap).sort();
+  var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return{
+    labels:keys.map(function(k){
+      var p=k.split('-');
+      return MN[parseInt(p[1],10)-1]+" '"+p[0].slice(2);
+    }),
+    counts:keys.map(function(k){return monthMap[k].counts;}),
+    incidents:keys.map(function(k){return monthMap[k].incidents;})
+  };
 }
 function dC(id){if(CH[id]){CH[id].destroy();delete CH[id];}}
 function mkB(id,labels,data,colors,horiz){
@@ -184,43 +292,95 @@ function mkTL(id,items,vFn,lFn,onCl){
   });
 }
 var incFilter='all';
+function setIncFilter(f){
+  incFilter=f||'all';
+  mkInc('dm-inc');
+  var el=document.getElementById('dm-inc');
+  if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
 function mkInc(id){
   var el=document.getElementById(id);if(!el)return;el.innerHTML='';
-  if(!INC.length){
-    el.innerHTML='<div style="padding:14px;color:var(--t3);font-size:12px">No incident data from ServiceNow yet.</div>';
+  var INC_VIEW=getFilteredIncidents();
+  if(!INC_VIEW.length){
+    el.innerHTML='<div style="padding:14px;color:var(--t3);font-size:12px">No ServiceNow failures in this range. Failures appear when a CTASK or CMR is closed as <b>Unsuccessful</b> or <b>Successful with issues</b>.</div>';
     return;
   }
-  var incCnt=INC.filter(function(x){return x.t==='inc';}).length;
-  var ctCnt=INC.filter(function(x){return x.t==='ctask';}).length;
-  // Filter bar
+  var nAll=INC_VIEW.length;
+  var nUn=INC_VIEW.filter(function(x){return x.fail_kind==='unsuccessful'||x.rb;}).length;
+  var nIss=INC_VIEW.filter(function(x){return x.fail_kind==='with_issues'||(!x.rb && (x.close_code||'').toLowerCase().indexOf('issue')>=0);}).length;
+  var nRb=INC_VIEW.filter(function(x){return !!x.rb;}).length;
+  var nCt=INC_VIEW.filter(function(x){return x.t==='ctask'||(x.source||'').indexOf('ctask')>=0;}).length;
+  var nCm=INC_VIEW.filter(function(x){return x.t==='cmr'||x.t==='inc'||(x.source||'').indexOf('cmr')>=0;}).length;
+
   var fb=document.createElement('div');
   fb.style.cssText='display:flex;gap:6px;margin-bottom:12px;padding:10px 12px;background:linear-gradient(135deg,#f4f7fb,#eef2ff);border-radius:10px;border:1px solid var(--bd2);align-items:center;flex-wrap:wrap';
   fb.innerHTML='<span style="font-size:10px;font-weight:800;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-right:6px">Filter:</span>';
-  ['all','inc','ctask'].forEach(function(f){
+
+  var filters=[
+    {id:'all', label:'All ('+nAll+')'},
+    {id:'unsuccessful', label:'Unsuccessful ('+nUn+')'},
+    {id:'with_issues', label:'With issues ('+nIss+')'},
+    {id:'rollback', label:'Rollback ('+nRb+')'},
+    {id:'ctask', label:'CTASK ('+nCt+')'},
+    {id:'cmr', label:'CMR ('+nCm+')'}
+  ];
+  filters.forEach(function(f){
     var btn=document.createElement('button');
-    var lbl=f==='all'?'All Issues ('+INC.length+')':f==='inc'?'\u26D4 INC Logged ('+incCnt+')':'\u26A0 CTASK Logged ('+ctCnt+')';
-    btn.textContent=lbl;
-    btn.className='pb'+(incFilter===f?' on':'');
+    btn.textContent=f.label;
+    btn.className='pb'+(incFilter===f.id?' on':'');
     btn.style.cssText='font-size:11px;font-weight:700;padding:5px 14px;border-radius:999px';
-    btn.addEventListener('click',function(){incFilter=f;mkInc(id);});
+    btn.addEventListener('click',function(){setIncFilter(f.id);});
     fb.appendChild(btn);
   });
-  // Summary line
   var summ=document.createElement('span');
   summ.style.cssText='margin-left:auto;font-size:10px;color:var(--t3)';
-  summ.innerHTML='<strong style="color:var(--er)">'+incCnt+'</strong> INC &middot; <strong style="color:var(--wn)">'+ctCnt+'</strong> CTASK &middot; <strong>'+INC.filter(function(x){return x.rb;}).length+'</strong> Rollbacks';
+  summ.innerHTML='Live ServiceNow close_code · date-filtered';
   fb.appendChild(summ);
   el.appendChild(fb);
-  // Filtered list
-  var filtered=incFilter==='all'?INC:INC.filter(function(x){return x.t===incFilter;});
+
+  var filtered=INC_VIEW.filter(function(x){
+    if(incFilter==='all') return true;
+    if(incFilter==='unsuccessful') return x.fail_kind==='unsuccessful'||!!x.rb;
+    if(incFilter==='with_issues') return x.fail_kind==='with_issues'||(!x.rb && String(x.close_code||'').toLowerCase().indexOf('issue')>=0);
+    if(incFilter==='rollback') return !!x.rb;
+    if(incFilter==='ctask') return x.t==='ctask'||String(x.source||'').indexOf('ctask')>=0;
+    if(incFilter==='cmr') return x.t==='cmr'||x.t==='inc'||String(x.source||'').indexOf('cmr')>=0;
+    return true;
+  });
+
+  if(!filtered.length){
+    var empty=document.createElement('div');
+    empty.style.cssText='padding:14px;color:var(--t3);font-size:12px';
+    empty.textContent='No rows for this filter.';
+    el.appendChild(empty);
+    return;
+  }
+
   filtered.forEach(function(inc){
     var d=document.createElement('div');d.className='inci';
-    var col=inc.t==='inc'?'var(--er)':'var(--wn)';
-    var tBadge=inc.t==='inc'
-      ?'<span style="font-size:9px;background:#fef1f0;color:var(--er);padding:2px 7px;border-radius:4px;font-weight:700;border:1px solid #f5c6c3;margin-left:6px">INC</span>'
-      :'<span style="font-size:9px;background:#fff7e6;color:var(--wn);padding:2px 7px;border-radius:4px;font-weight:700;border:1px solid #f5dba0;margin-left:6px">CTASK</span>';
-    d.innerHTML='<div class="idot" style="background:'+col+'"></div><div><div class="ipr">'+inc.p+tBadge+'<span class="ich">'+inc.ch+'</span></div><div class="ids">'+inc.is+'</div><div class="idt">'+inc.dt+(inc.rb?' &middot; <strong>Rollback</strong>':'')+'</div></div>';
-    d.addEventListener('click',function(){openMod(inc.p+' \u2014 '+inc.ch,'<b>Type:</b> '+(inc.t==='inc'?'Incident (INC)':'Change Task (CTASK)')+'<br><b>Date:</b> '+inc.dt+'<br><b>Issue:</b> '+inc.is+'<br><b>Rollback:</b> '+(inc.rb?'Yes':'No'));});
+    var isUn=inc.fail_kind==='unsuccessful'||inc.rb;
+    var col=isUn?'var(--er)':(inc.t==='ctask'?'var(--wn)':'#f59e0b');
+    var kindLbl=isUn?'UNSUCCESSFUL / ROLLBACK':(inc.fail_kind==='with_issues'?'WITH ISSUES':(inc.close_code||'ISSUE'));
+    var tBadge='<span style="font-size:9px;background:'+(isUn?'#fef1f0':'#fff7e6')+';color:'+col+';padding:2px 7px;border-radius:4px;font-weight:700;border:1px solid '+(isUn?'#f5c6c3':'#f5dba0')+';margin-left:6px">'+escHtml(kindLbl)+'</span>';
+    var srcBadge=inc.t==='ctask'
+      ?'<span style="font-size:9px;background:#eef2ff;color:#4338ca;padding:2px 7px;border-radius:4px;font-weight:700;margin-left:6px">CTASK</span>'
+      :'<span style="font-size:9px;background:#f0fdf4;color:#15803d;padding:2px 7px;border-radius:4px;font-weight:700;margin-left:6px">CMR</span>';
+    d.innerHTML='<div class="idot" style="background:'+col+'"></div><div><div class="ipr">'+escHtml(inc.p)+tBadge+srcBadge+'<span class="ich">'+escHtml(inc.ch)+(inc.ctask?(' · '+escHtml(inc.ctask)):'')+'</span></div><div class="ids">'+escHtml(inc.is)+'</div><div class="idt">'+escHtml(inc.dt)+(inc.assignment_group?(' · '+escHtml(inc.assignment_group)):'')+(inc.assigned_to?(' · '+escHtml(inc.assigned_to)):'')+(inc.close_code?(' · '+escHtml(inc.close_code)):'')+(inc.rb?' · <strong>Rollback</strong>':'')+'</div></div>';
+    d.addEventListener('click',function(){
+      openMod(inc.p+' \u2014 '+inc.ch,
+        '<b>Type:</b> '+(inc.t==='ctask'?'Change Task (CTASK)':(inc.t==='inc'?'Incident / Unsuccessful CMR':'CMR'))+
+        '<br><b>Date:</b> '+escHtml(inc.dt)+
+        '<br><b>Issue:</b> '+escHtml(inc.is)+
+        '<br><b>Close code:</b> '+escHtml(inc.close_code||'—')+
+        '<br><b>Fail kind:</b> '+escHtml(inc.fail_kind||'—')+
+        '<br><b>Assignment group:</b> '+escHtml(inc.assignment_group||'—')+
+        '<br><b>Assigned to:</b> '+escHtml(inc.assigned_to||'—')+
+        '<br><b>CTASK:</b> '+escHtml(inc.ctask||'—')+
+        '<br><b>Source:</b> '+escHtml(inc.source||'servicenow')+
+        '<br><b>Rollback:</b> '+(inc.rb?'Yes':'No')+
+        (inc.mttr_hours?('<br><b>MTTR (ServiceNow window):</b> '+inc.mttr_hours+'h'):'')
+      );
+    });
     el.appendChild(d);
   });
 }
@@ -274,6 +434,7 @@ var F=null;
 
 function applyF(){
   F=getF();
+  toggleCustomDateInputs();
   var lu=document.getElementById('lu');if(lu)lu.textContent='Applying...';
   Object.keys(CH).forEach(function(id){if(CH[id]){CH[id].destroy();delete CH[id];}});
   var filtered=getFilteredCMR(),dora=calcDORA(filtered);
@@ -285,18 +446,24 @@ function applyF(){
   setEl('kd-cfr', filtered.length===0?'No ServiceNow CMRs in this range':dora.incCnt+' incidents / '+filtered.length+' CMRs');
   setEl('kv-mttr',filtered.length===0?'—':dora.mttrLbl);
   setEl('kl-mttr',filtered.length===0?'N/A':dora.mttrLvl);
-  setEl('kd-mttr',filtered.length===0?'No incidents in this range':'Mean restore time from '+dora.incCnt+' prod incidents');
+  setEl('kd-mttr',filtered.length===0?'No incidents in this range':(dora.incCnt?(dora.mttrH>0?('Avg ServiceNow window · '+dora.incCnt+' failures'):'Failures found but no start/end times'):'No failures in range'));
   var pMap={};filtered.forEach(function(r){pMap[r.p]=1;});
+  var snowItems=getFilteredSnowItems();
   setEl('sum-cmrs', String(filtered.length));
   setEl('sum-cfr', filtered.length?dora.cfrLbl:'—');
   setEl('sum-proj', String(Object.keys(pMap).length));
-  setEl('sum-ctasks', String(snowMeta.ctask_count||0));
-  setEl('sum-source', snowSource==='servicenow'?'ServiceNow live':'Waiting for ServiceNow');
+  setEl('sum-ctasks', String(snowItems.length));
+  setEl('sum-source', snowSource==='servicenow'?'ServiceNow · Overall IndiGo':'Waiting for ServiceNow');
   var db=document.getElementById('dbdg');if(db)db.textContent='DORA Metrics';
   var ftr=document.getElementById('ftr-src');
+  var w=getDateWindow();
+  var rangeLbl=(F&&F.fr==='custom')?((w.from||'?')+' → '+(w.to||'?')):(F?F.fr:'all');
   if(ftr) ftr.textContent = snowSource==='servicenow'
-    ? ('Live ServiceNow · '+CMR_DATA.length+' CHGs · '+(snowMeta.ctask_count||0)+' CTASKs · group DIG-SOCE-SRE-OCP')
+    ? ('Live ServiceNow · Overall IndiGo DIG-* · range '+rangeLbl+' · '+filtered.length+' CMRs · '+snowItems.length+' OCP CTASKs · Metric 3 close_code')
     : ('ServiceNow: no data yet'+(snowError?' · '+snowError:''));
+  if(lu) lu.textContent='Filter applied · '+rangeLbl+' · '+filtered.length+' CMRs';
+  // Refresh Projects CMR-date picker for current window
+  if(typeof initCMRDetailWidget==='function') initCMRDetailWidget();
   renderTab(activeTab);loadLive();
 }
 
@@ -318,14 +485,18 @@ function rOV(){
   setEl('kd-cfr', isEmpty
     ? 'No CMR deployments in this range'
     : dora.incCnt+' incident'+(dora.incCnt!==1?'s':'')+' / '+filtered.length+' CMRs \xb7 '+
-      (F&&F.fr==='all'?'Jan\u2013May 2026':'Last '+dora.days+' days'));
+      (F&&F.fr==='all'?'All available':(F&&F.fr==='custom'?'Custom range':'Last '+dora.days+' days')));
 
   // ── MTTR KPI card — NOW DYNAMIC ─────────────────────────────────
   setEl('kv-mttr', isEmpty ? 'N/A' : dora.mttrLbl);
   setEl('kl-mttr', isEmpty ? 'N/A' : dora.mttrLvl);
   setEl('kd-mttr', isEmpty
     ? 'No incidents in this range'
-    : 'Mean restore time from '+dora.incCnt+' prod incident'+(dora.incCnt!==1?'s':''));
+    : (dora.incCnt
+        ? (dora.mttrH>0
+            ? ('Avg ServiceNow planned/work window · '+dora.incCnt+' failure'+(dora.incCnt!==1?'s':''))
+            : 'Failures found · no start/end times on CHG')
+        : 'No failures in range'));
 
   // ── Header badge ──
   var db=document.getElementById('dbdg');
@@ -615,8 +786,13 @@ function rDORA(){
     mkTL('dm-slow',cmrLT.slice(0,8),function(i){return i.v;},function(i){return i.n+' \xb7 '+i.v.toFixed(1)+'h';});
   }
   setEl('cfr-val',   isEmpty ? 'N/A' : dora.cfrLbl);
-setEl('cfr-total', isEmpty ? '0'   : filtered.length.toString());
-setEl('cfr-issues',isEmpty ? '0'   : dora.incCnt.toString());
+  setEl('cfr-total', isEmpty ? '0'   : filtered.length.toString());
+  setEl('cfr-issues',isEmpty ? '0'   : dora.incCnt.toString());
+  var inv=getFilteredIncidents();
+  var nUn=inv.filter(function(x){return x.fail_kind==='unsuccessful'||x.rb;}).length;
+  var nIss=inv.filter(function(x){return x.fail_kind==='with_issues'||(!x.rb && String(x.close_code||'').toLowerCase().indexOf('issue')>=0);}).length;
+  setEl('cfr-unsuccessful', String(nUn));
+  setEl('cfr-with-issues', String(nIss));
 setEl('mttr-val', isEmpty ? 'N/A' : dora.mttrLbl);
 setEl('mttr-issues',isEmpty ? '0' : dora.rbCnt.toString());
 setEl('mttr-lvl', isEmpty ? '\u2013' : dora.mttrLvl);
@@ -666,8 +842,7 @@ function rPROJ(){
       scales:{x:{beginAtZero:true,grid:{color:'#edf1f7'},ticks:{color:'#4a6070',font:{size:10}}},y:{grid:{display:false},ticks:{color:'#4a6070',font:{size:10}}}},
       onClick:function(_,els){if(els.length){var r=usePRJ[els[0].index];openMod(r.n,'<b>CMRs in range:</b> '+r.c+'<br><b>Issues:</b> '+(r.i?'Yes':'No'));}}}});
   setTimeout(function(){initCMRDetailWidget();},100);
-  setTimeout(function(){initCMRDetailWidget();},100);
-  rNewMS();  // ← ADD THIS LINE
+  rNewMS();
 }
 
 function renderPage(page,dynPRJ){
@@ -691,7 +866,8 @@ function renderPage(page,dynPRJ){
 // ── RENDER: NEW MICROSERVICES REGISTRY ───────────────────
 function rNewMS(){
   var rows=[];
-  NEW_MS_REGISTRY.forEach(function(entry){
+  var registry=getFilteredNewMS();
+  registry.forEach(function(entry){
     var cluster=CMAP[entry.cl]||entry.cl;
     (entry.ms||[]).forEach(function(name){
       rows.push({date:entry.d,name:name,type:'MS',project:entry.p,chg:entry.chg||'\u2014',cluster:cluster,sno:entry.sno});
@@ -707,7 +883,7 @@ function rNewMS(){
   var projSet={};rows.forEach(function(r){projSet[r.project]=true;});
 
   var badge=document.getElementById('new-ms-badge');
-  if(badge)badge.textContent=(totalMS+totalMF)+' new services tracked';
+  if(badge)badge.textContent=(totalMS+totalMF)+' new services in range';
 
   var statsEl=document.getElementById('new-ms-stats');
   if(statsEl){
@@ -715,12 +891,12 @@ function rNewMS(){
       '<div style="flex:1;min-width:120px;background:linear-gradient(160deg,#eef2ff,#fff);border:1px solid #ccd6ff;border-radius:10px;padding:12px;text-align:center"><div style="font-size:24px;font-weight:900;color:#1a3acc">'+totalMS+'</div><div style="font-size:10px;color:var(--t3)">New Microservices</div></div>'+
       '<div style="flex:1;min-width:120px;background:linear-gradient(160deg,#edfaf3,#fff);border:1px solid #c3e8d8;border-radius:10px;padding:12px;text-align:center"><div style="font-size:24px;font-weight:900;color:#0a9450">'+totalMF+'</div><div style="font-size:10px;color:var(--t3)">New Micro-Frontends</div></div>'+
       '<div style="flex:1;min-width:120px;background:linear-gradient(160deg,#f3f0ff,#fff);border:1px solid #d4c8ff;border-radius:10px;padding:12px;text-align:center"><div style="font-size:24px;font-weight:900;color:#6b4fff">'+Object.keys(projSet).length+'</div><div style="font-size:10px;color:var(--t3)">Projects Introduced New Services</div></div>'+
-      '<div style="flex:1;min-width:120px;background:linear-gradient(160deg,#fff8e6,#fff);border:1px solid #f5dba0;border-radius:10px;padding:12px;text-align:center"><div style="font-size:24px;font-weight:900;color:#c47900">'+NEW_MS_REGISTRY.length+'</div><div style="font-size:10px;color:var(--t3)">CMRs with New Services</div></div>';
+      '<div style="flex:1;min-width:120px;background:linear-gradient(160deg,#fff8e6,#fff);border:1px solid #f5dba0;border-radius:10px;padding:12px;text-align:center"><div style="font-size:24px;font-weight:900;color:#c47900">'+registry.length+'</div><div style="font-size:10px;color:var(--t3)">CMRs with New Services</div></div>';
   }
 
   var el=document.getElementById('new-ms-table');
   if(!el)return;
-  if(rows.length===0){el.innerHTML='<div class="ldg">No new microservices deployed.</div>';return;}
+  if(rows.length===0){el.innerHTML='<div class="ldg">No new microservices in the selected date range.</div>';return;}
 
   var h='<div style="overflow-x:auto"><table class="etbl"><thead><tr>';
   h+='<th>#</th><th>Deploy Date</th><th>Type</th><th>&#9733; Service Name</th><th>Application / Project</th><th>CMR No.</th><th>Cluster</th>';
@@ -954,17 +1130,50 @@ function rPIPE(){
   if(el){
     var w=getDateWindow();
     var label=(F&&F.fr==='custom') ? ((w.from||'start')+' to '+(w.to||'today')) : (F?F.fr:'all');
-    el.textContent='Range: '+label+' · Group: DIG-SOCE-SRE-OCP · Click any card for CTASK-level detail';
+    el.textContent='Range: '+label+' · Group: DIG-SOCE-SRE-OCP · Live CTASK counts above · Stage/3Scale/Vault playbook below';
   }
   showOpsMetric(OPS_ACTIVE||'ctask');
+  renderPipelinePlaybook();
+}
+function renderPipelinePlaybook(){
+  var pb=document.getElementById('pipe-body');
+  if(pb){
+    pb.innerHTML='';
+    PD.forEach(function(p){
+      var tr=document.createElement('tr');
+      tr.style.cursor='pointer';
+      tr.innerHTML='<td><strong>'+p.s+'</strong></td><td>'+p.n+'</td><td style="font-size:11px;color:#7b90a5">'+p.ch+'</td><td><strong>'+p.et+'</strong></td><td style="font-size:11px;color:#c52c27">'+p.fm+'</td>';
+      tr.addEventListener('click',function(){
+        openMod('Stage '+p.s+': '+p.n,'<b>Checks:</b> '+p.ch+'<br><b>Est. time:</b> '+p.et+'<br><b>Failure mode:</b> '+p.fm);
+      });
+      pb.appendChild(tr);
+    });
+  }
+  var sb=document.getElementById('scale-body');
+  if(sb){
+    sb.innerHTML='';
+    SD.forEach(function(s2){
+      var tr=document.createElement('tr');
+      tr.innerHTML='<td>'+s2.st+'</td><td>'+s2.d+'</td><td>'+s2.p+'</td>';
+      sb.appendChild(tr);
+    });
+  }
+  if(typeof mkB==='function' && document.getElementById('pipe-chart')){
+    mkB('pipe-chart', PD.map(function(p){return p.s+'.';}), PD.map(function(p){return p.em;}), PD.map(function(_,i){return PAL[i%PAL.length];}));
+  }
 }
 
 // ── CMR DETAIL WIDGET ────────────────────────────────────
 function initCMRDetailWidget(){
   var sel=document.getElementById('cmr-date-sel');if(!sel)return;
-  var today=todayIST(),dateSet={};
-  CMR_DATA.forEach(function(r){if(r.d<=today)dateSet[r.d]=true;});
+  var today=todayIST(),dateSet={},w=getDateWindow();
+  CMR_DATA.forEach(function(r){
+    if(r.d>today) return;
+    if((w.from||w.to) && !passesDateWindow(r.d)) return;
+    dateSet[r.d]=true;
+  });
   var dates=Object.keys(dateSet).sort(function(a,b){return b.localeCompare(a);});
+  var prev=sel.value;
   sel.innerHTML='<option value="">— Choose a Date —</option>';
   dates.forEach(function(d){
     var dt=new Date(d+'T00:00:00+05:30');
@@ -972,7 +1181,11 @@ function initCMRDetailWidget(){
     opt.textContent=dt.toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
     sel.appendChild(opt);
   });
-  if(dates.length>0){sel.value=dates[0];loadCMRDetail(dates[0]);}
+  if(prev && dateSet[prev]){sel.value=prev;loadCMRDetail(prev);}
+  else if(dates.length>0){sel.value=dates[0];loadCMRDetail(dates[0]);}
+  else if(document.getElementById('cmr-detail-table')){
+    document.getElementById('cmr-detail-table').innerHTML='<div class="ldg">No CMR dates in the selected filter range.</div>';
+  }
 }
 
 function loadCMRDetail(dateStr){
@@ -1131,14 +1344,26 @@ async function loadSnowData(){
       if(data.warning) snowError=data.warning;
       CMR_DATA=Array.isArray(data.cmr_data)?data.cmr_data:[];
       CMR_EXTRA=Array.isArray(data.cmr_extra)?data.cmr_extra:[];
-      INC=Array.isArray(data.incidents)?data.incidents:[];
+      INC=(Array.isArray(data.incidents)?data.incidents:[]).filter(function(inc){
+        var src=String(inc.source||'servicenow').toLowerCase();
+        return src.indexOf('sheet')<0 && src.indexOf('book2')<0 && src.indexOf('xlsx')<0;
+      });
       NEW_MS_REGISTRY=Array.isArray(data.new_ms_registry)?data.new_ms_registry:[];
       PRJ=Array.isArray(data.projects)?data.projects:[];
-      snowMeta={ctask_count:data.ctask_count||0, chg_count:data.chg_count||0, items:data.items||[]};
+      snowMeta={
+        ctask_count:data.ctask_count||0,
+        chg_count:data.chg_count||0,
+        items:data.items||[],
+        close_code_stats:data.close_code_stats||{},
+        failure_stats:data.failure_stats||{},
+        metric3_rule:data.metric3_rule||''
+      };
       if(data.warning) snowError=data.warning;
       if(data.permission_hint) snowError=data.permission_hint;
       snowSource=CMR_DATA.length?'servicenow':'none';
-      console.log('ServiceNow:',CMR_DATA.length,'CMRs', snowMeta.ctask_count,'CTASKs', data.warning||'');
+      console.log('ServiceNow live:',CMR_DATA.length,'CMRs', snowMeta.ctask_count,'CTASKs',
+        'failures', (data.failure_stats&&data.failure_stats.total_failures)||INC.length,
+        data.close_code_stats||{});
     }
   }catch(e){
     snowError=e.message||String(e);
@@ -1165,9 +1390,27 @@ async function loadSnowData(){
 }
 
 // ── LOAD LIVE — Datadog infra only (no fake numbers) ─────
+function datadogFromParam(){
+  var f=F||getF();
+  var fr=f.fr||'now-30d';
+  if(fr==='custom'){
+    var from=f.from||todayIST(), to=f.to||todayIST();
+    var a=new Date(from+'T00:00:00+05:30'), b=new Date(to+'T00:00:00+05:30');
+    var days=Math.max(1, Math.round((b-a)/86400000)+1);
+    if(days<=1) return 'now-24h';
+    if(days<=2) return 'now-2d';
+    if(days<=7) return 'now-7d';
+    if(days<=14) return 'now-14d';
+    if(days<=30) return 'now-30d';
+    return 'now-90d';
+  }
+  if(fr==='all') return 'now-90d';
+  return fr;
+}
 async function loadLive(){
-  var params={from:F.fr};
-  if(F.cl) params.cluster=F.cl;
+  var f=F||getF();
+  var params={from:datadogFromParam()};
+  if(f.cl) params.cluster=f.cl;
 
   try{
     var ph=await apiGet('/api/dora/pod-health',params);
@@ -1197,10 +1440,13 @@ async function loadLive(){
   if(eu)eu.textContent='As of '+ts+' IST';
   var lu=document.getElementById('lu');
   if(lu){
+    var filtered=getFilteredCMR();
+    var w=getDateWindow();
+    var rangeLbl=(f.fr==='custom')?((w.from||'?')+' → '+(w.to||'?')):f.fr;
     var src=snowSource==='servicenow'
-      ?('ServiceNow · '+CMR_DATA.length+' CMRs')
+      ?('ServiceNow · '+filtered.length+' CMRs in range')
       :('No ServiceNow data'+(snowError?' · '+snowError:''));
-    lu.textContent=src+' · '+(F.cl?F.cl:'All Clusters')+' · '+F.fr+' · '
+    lu.textContent=src+' · '+(f.cl?f.cl:'All Clusters')+' · '+rangeLbl+' · '
       +now.toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:true})+' IST';
   }
 }
