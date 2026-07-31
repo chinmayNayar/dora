@@ -743,6 +743,24 @@ class ServiceNowClient:
             return "successful"
         return c
 
+    @staticmethod
+    def _is_cloud_or_network_group(assignment_group: str) -> bool:
+        """
+        Exclude Cloud Ops, Network, and any cloud-related DIG groups
+        from Overall IndiGo Metric 3. Keep apps / Navitaire / OCP / etc.
+        """
+        ag = (assignment_group or "").strip().upper()
+        if not ag:
+            return False
+        if "CLOUD" in ag:
+            return True
+        if "NETWORK" in ag:
+            return True
+        # IndiGo network teams: …-NET-…, …-NETENGG-…
+        if re.search(r"(^|[-_])NET(ENGG)?([-_]|$)", ag):
+            return True
+        return False
+
     @classmethod
     def _close_code_marks(cls, close_code: str) -> Tuple[bool, bool, str]:
         """
@@ -1109,8 +1127,8 @@ class ServiceNowClient:
         to_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Overall IndiGo Metric 3: all DIG-* CHGs closed Unsuccessful / Successful with issues.
-        Complements OCP-bin CTASK view so Last 30 days is not empty org-wide.
+        Overall IndiGo Metric 3: DIG-* CHGs closed Unsuccessful / Successful with issues.
+        Excludes Cloud Ops, Network, and any cloud-related assignment groups.
         """
         if to_date is None:
             to_date = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
@@ -1136,10 +1154,14 @@ class ServiceNowClient:
             logger.exception("fetch_indigo_close_failures failed")
 
         items = []
+        excluded = 0
         for r in rows:
             ag = self._dv(r.get("assignment_group"))
-            # Overall IndiGo = DIG-* digital groups
+            # Overall IndiGo = DIG-* digital groups (not Cloud / Network)
             if ag and not ag.upper().startswith("DIG"):
+                continue
+            if self._is_cloud_or_network_group(ag or ""):
+                excluded += 1
                 continue
             closed = self._normalize_date(self._dv(r.get("closed_at")))
             start = self._normalize_date(self._dv(r.get("start_date"))) or closed
@@ -1179,10 +1201,15 @@ class ServiceNowClient:
         return {
             "items": items,
             "total": len(items),
+            "excluded_cloud_network": excluded,
             "from_date": from_date,
             "to_date": to_date,
             "query_error": query_error,
             "fetched_at": datetime.now(tz=timezone.utc).isoformat(),
+            "scope_note": (
+                "DIG-* close failures excluding Cloud Ops, Network, "
+                "and any assignment group containing CLOUD / NETWORK / NET"
+            ),
         }
 
     def merge_indigo_failures(self, dashboard: Dict[str, Any],

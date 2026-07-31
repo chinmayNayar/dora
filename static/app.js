@@ -459,7 +459,7 @@ function applyF(){
   var w=getDateWindow();
   var rangeLbl=(F&&F.fr==='custom')?((w.from||'?')+' → '+(w.to||'?')):(F?F.fr:'all');
   if(ftr) ftr.textContent = snowSource==='servicenow'
-    ? ('Live ServiceNow · Overall IndiGo DIG-* · range '+rangeLbl+' · '+filtered.length+' CMRs · '+snowItems.length+' OCP CTASKs · Metric 3 close_code')
+    ? ('Live ServiceNow · Overall IndiGo DIG-* (excl. Cloud/Network) · range '+rangeLbl+' · '+filtered.length+' CMRs · '+snowItems.length+' OCP CTASKs · Metric 3 close_code')
     : ('ServiceNow: no data yet'+(snowError?' · '+snowError:''));
   if(lu) lu.textContent='Filter applied · '+rangeLbl+' · '+filtered.length+' CMRs';
   // Refresh Projects CMR-date picker for current window

@@ -163,7 +163,7 @@ def snow_cmr_data():
     to_date = request.args.get("to_date", None)
     ag = request.args.get("assignment_group", "") or SNOW_AG
     force = request.args.get("force_refresh", "false").lower() == "true"
-    ck = f"snow::v5::{from_date}::{to_date}::{ag}"
+    ck = f"snow::v6::{from_date}::{to_date}::{ag}"
     if not force:
         cached = snow_cg(ck)
         if cached:
@@ -175,7 +175,7 @@ def snow_cmr_data():
     try:
         records = snow.fetch_change_requests(from_date=from_date, to_date=to_date, assignment_group=ag or None)
         result = snow.transform_to_dashboard_format(records)
-        # Overall IndiGo: all DIG-* CHG close_code failures (Metric 3)
+        # Overall IndiGo DIG-* close failures, excluding Cloud / Network
         indigo = snow.fetch_indigo_close_failures(from_date=from_date, to_date=to_date)
         result = snow.merge_indigo_failures(result, indigo)
         result["assignment_group"] = ag
@@ -196,6 +196,8 @@ def snow_cmr_data():
                     slot["with_issues"] += 1
         for inc in result.get("incidents") or []:
             agn = inc.get("assignment_group") or ("DIG-SOCE-SRE-OCP" if "ctask" in str(inc.get("source") or "") else "DIG")
+            if snow._is_cloud_or_network_group(agn):
+                continue
             g = by_ag.setdefault(agn, {"failures": 0, "unsuccessful": 0, "with_issues": 0})
             g["failures"] += 1
             if inc.get("fail_kind") == "unsuccessful" or inc.get("rb"):
@@ -203,11 +205,15 @@ def snow_cmr_data():
             elif inc.get("fail_kind") == "with_issues":
                 g["with_issues"] += 1
         result["overall_indigo"] = {
-            "label": "Overall IndiGo · OCP CTASKs + all DIG-* close_code failures",
+            "label": (
+                "Overall IndiGo · OCP CTASKs + DIG-* close failures "
+                "(excl. Cloud Ops / Network / Cloud)"
+            ),
             "total_cmrs": result.get("total", 0),
             "total_ctasks": result.get("ctask_count", 0),
             "failures": (result.get("failure_stats") or {}).get("total_failures", 0),
             "indigo_close_failures": (result.get("indigo_failures") or {}).get("total", 0),
+            "excluded_cloud_network": (indigo or {}).get("excluded_cloud_network", 0),
             "by_cluster": by_cl,
             "by_assignment_group": by_ag,
             "close_code_stats": result.get("close_code_stats"),
@@ -217,7 +223,8 @@ def snow_cmr_data():
             "source": "servicenow_live",
             "note": (
                 "Metric 3 = OCP CTASK/CMR close_code + Overall IndiGo DIG-* CHG "
-                "Unsuccessful / Successful with issues. Time filter uses close/activity date."
+                "Unsuccessful / Successful with issues. Excludes Cloud Ops, Network, "
+                "and any cloud-related assignment group. Time filter uses close/activity date."
             ),
         }
         result["from_cache"] = False
