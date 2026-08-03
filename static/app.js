@@ -13,7 +13,13 @@ var INC=[];
 var snowError='';
 var snowMeta={ctask_count:0, chg_count:0, items:[]};
 var OCP_BIN_CHGS=[]; // change_request assigned to DIG-SOCE-SRE-OCP
-var OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', q:''};
+var OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', type:'', assigned:'', q:''};
+var OPS_F={ci:'', type:'', state:'', assigned:'', chgGroup:'', q:''};
+var INC_F={project:'', group:'', closeCode:'', q:''};
+var PROJ_F={status:'', q:''};
+var NEW_MS_F={type:'', project:'', cluster:'', q:''};
+var CMR_DETAIL_F={project:'', cluster:'', status:'', q:''};
+var CMR_DETAIL_ROWS=[]; // cache for re-filtering current date
 
 // Pipeline reference data (ops playbook — keep on Pipeline tab; not from ServiceNow)
 var PD=[
@@ -39,6 +45,13 @@ var SD=[
 Chart.defaults.color='#4a6070';Chart.defaults.borderColor='#dde5ef';Chart.defaults.font.family='Inter,sans-serif';
 var CH={},PG=1,PS=10,activeTab='overview';
 var CMAP={app:'ocpappprdclu',ap2:'ocpappprdclu2',sso:'ssocpappprdclu',int:'ocpintprdclu',in2:'ocpintprdclu2'};
+
+/** Metric 4: sum of Pipeline Stage Est. Time (minutes → hours). Not CMR open→close. */
+function pipelineMttrHours(){
+  var emMin=0;
+  (PD||[]).forEach(function(p){ emMin+=Number(p.em)||0; });
+  return emMin>0?parseFloat((emMin/60).toFixed(2)):0;
+}
 
 // ── CMR FILTER ENGINE ────────────────────────────────────
 function todayIST(){return new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'});}
@@ -186,13 +199,8 @@ function calcDORA(filtered){
   var total=filtered.length,perDay=days>0?total/days:0;
   var incs=filtered.filter(function(r){return r.i;}),rbs=filtered.filter(function(r){return r.r;});
   var cfr=total>0?(incs.length/total*100):0;
-  // MTTR from live ServiceNow planned/work windows on failed CMRs (field m)
-  var mttrSum=0, mttrN=0;
-  incs.forEach(function(r){
-    var h=Number(r.m)||0;
-    if(h>0){ mttrSum+=h; mttrN++; }
-  });
-  var mttrH=mttrN>0?(mttrSum/mttrN):0;
+  // Metric 4 MTTR = Pipeline Stage Est. Time sum (PD[].em), NOT CMR open→close / 48h windows
+  var mttrH=incs.length>0?pipelineMttrHours():0;
   var dfLvl,dfLbl;
   if(total===0){dfLvl='N/A';dfLbl='—';}
   else if(perDay>=1){dfLvl='Elite';dfLbl=perDay.toFixed(1)+'/day';}
@@ -298,6 +306,26 @@ function setIncFilter(f){
   var el=document.getElementById('dm-inc');
   if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
+function setIncAttrFilter(key, val){
+  if(key==='project') INC_F.project=val||'';
+  else if(key==='group') INC_F.group=val||'';
+  else if(key==='closeCode') INC_F.closeCode=val||'';
+  else if(key==='q') INC_F.q=val||'';
+  mkInc('dm-inc');
+  var cmrInc=document.getElementById('cmr-inc');
+  if(cmrInc) mkInc('cmr-inc');
+  if(key==='q'){
+    var el=document.getElementById('dm-inc')||document.getElementById('cmr-inc');
+    var inp=el&&el.querySelector('input[type="search"]');
+    if(inp){ inp.focus(); var n=inp.value.length; try{inp.setSelectionRange(n,n);}catch(e){} }
+  }
+}
+function resetIncAttrFilters(){
+  INC_F={project:'', group:'', closeCode:'', q:''};
+  mkInc('dm-inc');
+  var cmrInc=document.getElementById('cmr-inc');
+  if(cmrInc) mkInc('cmr-inc');
+}
 function mkInc(id){
   var el=document.getElementById(id);if(!el)return;el.innerHTML='';
   var INC_VIEW=getFilteredIncidents();
@@ -338,13 +366,28 @@ function mkInc(id){
   fb.appendChild(summ);
   el.appendChild(fb);
 
+  var attrBar=document.createElement('div');
+  attrBar.innerHTML=tableFilterBar([
+    {label:'Project', allLabel:'All projects', values:uniqueSorted(INC_VIEW,function(x){return x.p;}), selected:INC_F.project, onChange:"setIncAttrFilter('project',this.value)", minWidth:'160px'},
+    {label:'Assignment group', allLabel:'All groups', values:uniqueSorted(INC_VIEW,function(x){return x.assignment_group;}), selected:INC_F.group, onChange:"setIncAttrFilter('group',this.value)", minWidth:'180px'},
+    {label:'Close code', allLabel:'All close codes', values:uniqueSorted(INC_VIEW,function(x){return x.close_code;}), selected:INC_F.closeCode, onChange:"setIncAttrFilter('closeCode',this.value)", minWidth:'160px'}
+  ], 'resetIncAttrFilters()', "setIncAttrFilter('q',this.value)", 'CHG, CTASK, issue text…', INC_F.q);
+  el.appendChild(attrBar.firstChild);
+
   var filtered=INC_VIEW.filter(function(x){
-    if(incFilter==='all') return true;
-    if(incFilter==='unsuccessful') return x.fail_kind==='unsuccessful'||!!x.rb;
-    if(incFilter==='with_issues') return x.fail_kind==='with_issues'||(!x.rb && String(x.close_code||'').toLowerCase().indexOf('issue')>=0);
-    if(incFilter==='rollback') return !!x.rb;
-    if(incFilter==='ctask') return x.t==='ctask'||String(x.source||'').indexOf('ctask')>=0;
-    if(incFilter==='cmr') return x.t==='cmr'||x.t==='inc'||String(x.source||'').indexOf('cmr')>=0;
+    if(incFilter==='all') {/* ok */}
+    else if(incFilter==='unsuccessful'){ if(!(x.fail_kind==='unsuccessful'||!!x.rb)) return false; }
+    else if(incFilter==='with_issues'){ if(!(x.fail_kind==='with_issues'||(!x.rb && String(x.close_code||'').toLowerCase().indexOf('issue')>=0))) return false; }
+    else if(incFilter==='rollback'){ if(!x.rb) return false; }
+    else if(incFilter==='ctask'){ if(!(x.t==='ctask'||String(x.source||'').indexOf('ctask')>=0)) return false; }
+    else if(incFilter==='cmr'){ if(!(x.t==='cmr'||x.t==='inc'||String(x.source||'').indexOf('cmr')>=0)) return false; }
+    if(INC_F.project && String(x.p||'')!==INC_F.project) return false;
+    if(INC_F.group && String(x.assignment_group||'')!==INC_F.group) return false;
+    if(INC_F.closeCode && String(x.close_code||'')!==INC_F.closeCode) return false;
+    if(INC_F.q){
+      var blob=[x.p,x.ch,x.ctask,x.is,x.close_code,x.assignment_group,x.assigned_to,x.source].join(' ').toLowerCase();
+      if(blob.indexOf(String(INC_F.q).toLowerCase())<0) return false;
+    }
     return true;
   });
 
@@ -378,7 +421,7 @@ function mkInc(id){
         '<br><b>CTASK:</b> '+escHtml(inc.ctask||'—')+
         '<br><b>Source:</b> '+escHtml(inc.source||'servicenow')+
         '<br><b>Rollback:</b> '+(inc.rb?'Yes':'No')+
-        (inc.mttr_hours?('<br><b>MTTR (ServiceNow window):</b> '+inc.mttr_hours+'h'):'')
+        (pipelineMttrHours()?('<br><b>MTTR (pipeline Est. Time):</b> '+pipelineMttrHours()+'h'):'')
       );
     });
     el.appendChild(d);
@@ -394,11 +437,14 @@ tick();setInterval(tick,1000);
 
 // ── MODAL ────────────────────────────────────────────────
 function openMod(title,body){
-  document.getElementById('mtitle').innerHTML=title;
-  document.getElementById('mbody').innerHTML='<div style="font-size:13px;line-height:1.7;color:#4a6070">'+body+'</div>';
-  document.getElementById('movl').classList.add('on');
+  var t=document.getElementById('mtitle');
+  var b=document.getElementById('mbody');
+  var o=document.getElementById('movl');
+  if(t) t.textContent=String(title==null?'Details':title);
+  if(b) b.innerHTML='<div style="font-size:13px;line-height:1.7;color:#4a6070">'+body+'</div>';
+  if(o) o.classList.add('on');
 }
-function closeMod(){document.getElementById('movl').classList.remove('on');}
+function closeMod(){ var o=document.getElementById('movl'); if(o) o.classList.remove('on'); }
 
 // ── TABS ─────────────────────────────────────────────────
 document.querySelectorAll('.tb').forEach(function(btn){
@@ -446,7 +492,7 @@ function applyF(){
   setEl('kd-cfr', filtered.length===0?'No ServiceNow CMRs in this range':dora.incCnt+' incidents / '+filtered.length+' CMRs');
   setEl('kv-mttr',filtered.length===0?'—':dora.mttrLbl);
   setEl('kl-mttr',filtered.length===0?'N/A':dora.mttrLvl);
-  setEl('kd-mttr',filtered.length===0?'No incidents in this range':(dora.incCnt?(dora.mttrH>0?('Avg ServiceNow window · '+dora.incCnt+' failures'):'Failures found but no start/end times'):'No failures in range'));
+  setEl('kd-mttr',filtered.length===0?'No incidents in this range':(dora.incCnt?(dora.mttrH>0?('From Pipeline Stage Est. Time · '+dora.incCnt+' failure'+(dora.incCnt!==1?'s':'')):'Failures found but pipeline Est. Time missing'):'No failures in range'));
   var pMap={};filtered.forEach(function(r){pMap[r.p]=1;});
   var snowItems=getFilteredSnowItems();
   setEl('sum-cmrs', String(filtered.length));
@@ -494,8 +540,8 @@ function rOV(){
     ? 'No incidents in this range'
     : (dora.incCnt
         ? (dora.mttrH>0
-            ? ('Avg ServiceNow planned/work window · '+dora.incCnt+' failure'+(dora.incCnt!==1?'s':''))
-            : 'Failures found · no start/end times on CHG')
+            ? ('From Pipeline Stage Est. Time · '+dora.incCnt+' failure'+(dora.incCnt!==1?'s':''))
+            : 'Failures found · pipeline Est. Time missing')
         : 'No failures in range'));
 
   // ── Header badge ──
@@ -559,6 +605,8 @@ function getFilteredOcpBinChgs(){
   var req=OCP_CHG_F.requestedBy||'';
   var risk=OCP_CHG_F.risk||'';
   var ci=OCP_CHG_F.ci||'';
+  var type=OCP_CHG_F.type||'';
+  var assigned=OCP_CHG_F.assigned||'';
   var q=String(OCP_CHG_F.q||'').trim().toLowerCase();
   return list.filter(function(ch){
     var st=ocpChgStateKey(ch.state);
@@ -570,6 +618,8 @@ function getFilteredOcpBinChgs(){
     if(req && String(ch.requested_by||'')!==req) return false;
     if(risk && String(ch.risk||'')!==risk) return false;
     if(ci && String(ch.configuration_item||'')!==ci) return false;
+    if(type && String(ch.type||'')!==type) return false;
+    if(assigned && String(ch.assigned_to||'')!==assigned) return false;
     if(q){
       var blob=[
         ch.number, ch.short_description, ch.configuration_item, ch.state,
@@ -604,12 +654,16 @@ function populateOcpChgDropdowns(){
   fillOcpChgSelect('ocpchg-req', 'requestedBy', 'All people', function(ch){ return ch.requested_by; });
   fillOcpChgSelect('ocpchg-risk', 'risk', 'All risk', function(ch){ return ch.risk; });
   fillOcpChgSelect('ocpchg-ci', 'ci', 'All CIs', function(ch){ return ch.configuration_item; });
+  fillOcpChgSelect('ocpchg-type', 'type', 'All types', function(ch){ return ch.type; });
+  fillOcpChgSelect('ocpchg-assigned', 'assigned', 'All assignees', function(ch){ return ch.assigned_to; });
 }
 function setOcpChgFilter(key, val){
   if(key==='kind') OCP_CHG_F.kind=val||'all';
   else if(key==='requestedBy') OCP_CHG_F.requestedBy=val||'';
   else if(key==='risk') OCP_CHG_F.risk=val||'';
   else if(key==='ci') OCP_CHG_F.ci=val||'';
+  else if(key==='type') OCP_CHG_F.type=val||'';
+  else if(key==='assigned') OCP_CHG_F.assigned=val||'';
   else if(key==='q') OCP_CHG_F.q=val||'';
   var kindEl=document.getElementById('ocpchg-kind');
   if(kindEl && key==='kind') kindEl.value=OCP_CHG_F.kind;
@@ -619,14 +673,20 @@ function setOcpChgFilter(key, val){
   if(riskEl && key==='risk') riskEl.value=OCP_CHG_F.risk;
   var ciEl=document.getElementById('ocpchg-ci');
   if(ciEl && key==='ci') ciEl.value=OCP_CHG_F.ci;
+  var typeEl=document.getElementById('ocpchg-type');
+  if(typeEl && key==='type') typeEl.value=OCP_CHG_F.type;
+  var asEl=document.getElementById('ocpchg-assigned');
+  if(asEl && key==='assigned') asEl.value=OCP_CHG_F.assigned;
   renderOcpBinChgs();
 }
 function resetOcpChgFilters(){
-  OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', q:''};
+  OCP_CHG_F={kind:'all', requestedBy:'', risk:'', ci:'', type:'', assigned:'', q:''};
   var kindEl=document.getElementById('ocpchg-kind'); if(kindEl) kindEl.value='all';
   var reqEl=document.getElementById('ocpchg-req'); if(reqEl) reqEl.value='';
   var riskEl=document.getElementById('ocpchg-risk'); if(riskEl) riskEl.value='';
   var ciEl=document.getElementById('ocpchg-ci'); if(ciEl) ciEl.value='';
+  var typeEl=document.getElementById('ocpchg-type'); if(typeEl) typeEl.value='';
+  var asEl=document.getElementById('ocpchg-assigned'); if(asEl) asEl.value='';
   var qEl=document.getElementById('ocpchg-q'); if(qEl) qEl.value='';
   renderOcpBinChgs();
 }
@@ -693,6 +753,8 @@ function renderOcpBinChgs(){
       +(OCP_CHG_F.requestedBy?(' · Requested by: '+OCP_CHG_F.requestedBy):'')
       +(OCP_CHG_F.risk?(' · Risk: '+OCP_CHG_F.risk):'')
       +(OCP_CHG_F.ci?(' · CI: '+OCP_CHG_F.ci):'')
+      +(OCP_CHG_F.type?(' · Type: '+OCP_CHG_F.type):'')
+      +(OCP_CHG_F.assigned?(' · Assigned: '+OCP_CHG_F.assigned):'')
       +(OCP_CHG_F.q?(' · Search: "'+OCP_CHG_F.q+'"'):'')
       +' · Click row for full fields';
   }
@@ -823,11 +885,32 @@ function rCMR(){
 }
 
 // ── RENDER: PROJECTS ─────────────────────────────────────
+function setProjFilter(key, val){
+  if(key==='status') PROJ_F.status=val||'';
+  else if(key==='q') PROJ_F.q=val||'';
+  PG=1;
+  rPROJ();
+}
+function resetProjFilters(){
+  PROJ_F={status:'', q:''};
+  var st=document.getElementById('proj-status'); if(st) st.value='';
+  var q=document.getElementById('proj-q'); if(q) q.value='';
+  PG=1;
+  rPROJ();
+}
 function rPROJ(){
   var filtered=getFilteredCMR();
   var pMap={};filtered.forEach(function(r){if(!pMap[r.p])pMap[r.p]={n:r.p,c:0,i:false};pMap[r.p].c++;if(r.i)pMap[r.p].i=true;});
   var dynPRJ=Object.keys(pMap).map(function(k){return pMap[k];}).sort(function(a,b){return b.c-a.c;});
-  var usePRJ=dynPRJ;
+  var q=String(PROJ_F.q||'').trim().toLowerCase();
+  var usePRJ=dynPRJ.filter(function(r){
+    if(PROJ_F.status==='issue' && !r.i) return false;
+    if(PROJ_F.status==='clean' && r.i) return false;
+    if(q && String(r.n||'').toLowerCase().indexOf(q)<0) return false;
+    return true;
+  });
+  var stEl=document.getElementById('proj-status'); if(stEl) stEl.value=PROJ_F.status||'';
+  var qEl=document.getElementById('proj-q'); if(qEl && document.activeElement!==qEl) qEl.value=PROJ_F.q||'';
   renderPage(PG,usePRJ);
   var og=document.getElementById('oth-grid');
   if(og){
@@ -864,6 +947,22 @@ function renderPage(page,dynPRJ){
   var next=document.createElement('button');next.className='pb';next.innerHTML='&#8250;';next.disabled=(page>=pages);next.onclick=function(){if(PG<pages)renderPage(PG+1,usePRJ);};pgb.appendChild(next);
 }
 // ── RENDER: NEW MICROSERVICES REGISTRY ───────────────────
+function setNewMsFilter(key, val){
+  if(key==='type') NEW_MS_F.type=val||'';
+  else if(key==='project') NEW_MS_F.project=val||'';
+  else if(key==='cluster') NEW_MS_F.cluster=val||'';
+  else if(key==='q') NEW_MS_F.q=val||'';
+  rNewMS();
+  if(key==='q'){
+    var el=document.getElementById('new-ms-table');
+    var inp=el&&el.querySelector('input[type="search"]');
+    if(inp){ inp.focus(); var n=inp.value.length; try{inp.setSelectionRange(n,n);}catch(e){} }
+  }
+}
+function resetNewMsFilters(){
+  NEW_MS_F={type:'', project:'', cluster:'', q:''};
+  rNewMS();
+}
 function rNewMS(){
   var rows=[];
   var registry=getFilteredNewMS();
@@ -878,12 +977,24 @@ function rNewMS(){
   });
   rows.sort(function(a,b){return b.date.localeCompare(a.date);});
 
-  var totalMS=rows.filter(function(r){return r.type==='MS';}).length;
-  var totalMF=rows.filter(function(r){return r.type==='MF';}).length;
-  var projSet={};rows.forEach(function(r){projSet[r.project]=true;});
+  var q=String(NEW_MS_F.q||'').trim().toLowerCase();
+  var filtered=rows.filter(function(r){
+    if(NEW_MS_F.type && r.type!==NEW_MS_F.type) return false;
+    if(NEW_MS_F.project && r.project!==NEW_MS_F.project) return false;
+    if(NEW_MS_F.cluster && r.cluster!==NEW_MS_F.cluster) return false;
+    if(q){
+      var blob=[r.name,r.project,r.chg,r.cluster,r.type].join(' ').toLowerCase();
+      if(blob.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+
+  var totalMS=filtered.filter(function(r){return r.type==='MS';}).length;
+  var totalMF=filtered.filter(function(r){return r.type==='MF';}).length;
+  var projSet={};filtered.forEach(function(r){projSet[r.project]=true;});
 
   var badge=document.getElementById('new-ms-badge');
-  if(badge)badge.textContent=(totalMS+totalMF)+' new services in range';
+  if(badge)badge.textContent=(totalMS+totalMF)+' new services'+(filtered.length!==rows.length?(' (of '+rows.length+')'):'')+' in range';
 
   var statsEl=document.getElementById('new-ms-stats');
   if(statsEl){
@@ -896,13 +1007,20 @@ function rNewMS(){
 
   var el=document.getElementById('new-ms-table');
   if(!el)return;
-  if(rows.length===0){el.innerHTML='<div class="ldg">No new microservices in the selected date range.</div>';return;}
+  var typeVals=['MS','MF'].filter(function(t){return rows.some(function(r){return r.type===t;});});
+  var bar=tableFilterBar([
+    {label:'Type', allLabel:'All types', values:typeVals, selected:NEW_MS_F.type, onChange:"setNewMsFilter('type',this.value)", minWidth:'120px'},
+    {label:'Project', allLabel:'All projects', values:uniqueSorted(rows,function(r){return r.project;}), selected:NEW_MS_F.project, onChange:"setNewMsFilter('project',this.value)", minWidth:'160px'},
+    {label:'Cluster', allLabel:'All clusters', values:uniqueSorted(rows,function(r){return r.cluster;}), selected:NEW_MS_F.cluster, onChange:"setNewMsFilter('cluster',this.value)", minWidth:'160px'}
+  ], 'resetNewMsFilters()', "setNewMsFilter('q',this.value)", 'Service name, project, CMR…', NEW_MS_F.q);
+  if(rows.length===0){el.innerHTML=bar+'<div class="ldg">No new microservices in the selected date range.</div>';return;}
+  if(filtered.length===0){el.innerHTML=bar+'<div class="ldg">No rows match the current filters.</div>';return;}
 
-  var h='<div style="overflow-x:auto"><table class="etbl"><thead><tr>';
+  var h=bar+'<div style="overflow-x:auto"><table class="etbl"><thead><tr>';
   h+='<th>#</th><th>Deploy Date</th><th>Type</th><th>&#9733; Service Name</th><th>Application / Project</th><th>CMR No.</th><th>Cluster</th>';
   h+='</tr></thead><tbody>';
 
-  rows.forEach(function(r,i){
+  filtered.forEach(function(r,i){
     var dt=new Date(r.date+'T00:00:00+05:30');
     var dateStr=dt.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
     var typeBadge=r.type==='MS'
@@ -932,7 +1050,7 @@ function rNewMS(){
 
   // Monthly chart
   var monthMap={};
-  rows.forEach(function(r){
+  filtered.forEach(function(r){
     var m=r.date.substring(0,7);
     if(!monthMap[m])monthMap[m]={ms:0,mf:0};
     if(r.type==='MS')monthMap[m].ms++;else monthMap[m].mf++;
@@ -1011,47 +1129,215 @@ function escHtml(s){
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+function uniqueSorted(list, getValue){
+  var values={};
+  (list||[]).forEach(function(item){
+    var n=String(getValue(item)||'').trim();
+    if(n) values[n]=1;
+  });
+  return Object.keys(values).sort(function(a,b){return a.localeCompare(b);});
+}
+function optsHtml(values, selected, allLabel){
+  var h='<option value="">'+escHtml(allLabel)+' ('+values.length+')</option>';
+  values.forEach(function(n){
+    h+='<option value="'+escHtml(n)+'"'+(selected===n?' selected':'')+'>'+escHtml(n)+'</option>';
+  });
+  return h;
+}
+function tableFilterBar(specs, resetFn, searchOnInput, searchPlaceholder, searchVal){
+  var h='<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px;padding:10px 12px;background:#f4f7fb;border:1px solid var(--bd2);border-radius:10px">';
+  specs.forEach(function(sp){
+    h+='<div class="fg"><span class="fl">'+escHtml(sp.label)+'</span>'
+      +'<select class="fsl" onchange="'+sp.onChange+'" style="min-width:'+(sp.minWidth||'150px')+'">'
+      +optsHtml(sp.values||[], sp.selected||'', sp.allLabel||'All')
+      +'</select></div>';
+  });
+  if(searchOnInput){
+    h+='<div class="fg" style="flex:1;min-width:200px"><span class="fl">Search</span>'
+      +'<input class="fsl" type="search" value="'+escHtml(searchVal||'')+'" placeholder="'+escHtml(searchPlaceholder||'Search…')+'" '
+      +'oninput="'+searchOnInput+'" style="min-width:200px;width:100%;cursor:text"></div>';
+  }
+  if(resetFn){
+    h+='<button class="btn" type="button" onclick="'+resetFn+'" style="height:30px;color:var(--t1);border-color:var(--bd2);background:#fff">Clear</button>';
+  }
+  h+='</div>';
+  return h;
+}
+function applyOpsCtaskFilters(list){
+  var q=String(OPS_F.q||'').trim().toLowerCase();
+  return (list||[]).filter(function(it){
+    if(OPS_F.ci && String(it.service||'')!==OPS_F.ci) return false;
+    if(OPS_F.type && String(it.ctask_type||'')!==OPS_F.type) return false;
+    if(OPS_F.state && String(it.ctask_state||'')!==OPS_F.state) return false;
+    if(OPS_F.assigned && String(it.assigned_to||'')!==OPS_F.assigned) return false;
+    if(q){
+      var blob=[it.ctask,it.chg,it.service,it.ctask_short,it.ctask_type,it.ctask_state,it.assigned_to,it.description].join(' ').toLowerCase();
+      if(blob.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+}
+function applyOpsChgFilters(list){
+  var q=String(OPS_F.q||'').trim().toLowerCase();
+  return (list||[]).filter(function(row){
+    if(OPS_F.ci && String(row.service||'')!==OPS_F.ci) return false;
+    if(OPS_F.state && String(row.chg_state||'')!==OPS_F.state) return false;
+    if(OPS_F.chgGroup && String(row.chg_assignment_group||'')!==OPS_F.chgGroup) return false;
+    if(q){
+      var nums=(row.ctasks||[]).map(function(c){return c.ctask;}).join(' ');
+      var blob=[row.chg,row.service,row.chg_short,row.chg_state,row.chg_assignment_group,nums].join(' ').toLowerCase();
+      if(blob.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+}
+function setOpsFilter(key, val){
+  if(key==='ci') OPS_F.ci=val||'';
+  else if(key==='type') OPS_F.type=val||'';
+  else if(key==='state') OPS_F.state=val||'';
+  else if(key==='assigned') OPS_F.assigned=val||'';
+  else if(key==='chgGroup') OPS_F.chgGroup=val||'';
+  else if(key==='q') OPS_F.q=val||'';
+  showOpsMetric(OPS_ACTIVE||'ctask', {noScroll:true});
+  if(key==='q'){
+    var body=document.getElementById('ops-detail-body');
+    var inp=body&&body.querySelector('input[type="search"]');
+    if(inp){ inp.focus(); var n=inp.value.length; try{inp.setSelectionRange(n,n);}catch(e){} }
+  }
+}
+function resetOpsFilters(){
+  OPS_F={ci:'', type:'', state:'', assigned:'', chgGroup:'', q:''};
+  showOpsMetric(OPS_ACTIVE||'ctask', {noScroll:true});
+}
+function bindCtaskRowClicks(root){
+  if(!root) return;
+  root.querySelectorAll('[data-ctask]').forEach(function(el){
+    el.addEventListener('click', function(ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+      var num=el.getAttribute('data-ctask');
+      if(num) openCtaskDetail(num);
+    });
+  });
+}
 function openCtaskDetail(ctaskNo){
-  var items=getFilteredSnowItems();
-  var it=null;
-  for(var i=0;i<items.length;i++){ if(items[i].ctask===ctaskNo){ it=items[i]; break; } }
-  if(!it){ openMod(ctaskNo||'CTASK','No detail found in current filter.'); return; }
+  try{
+    ctaskNo=String(ctaskNo||'').trim();
+    if(!ctaskNo||ctaskNo==='—'){ openMod('CTASK','No CTASK number.'); return; }
+    var items=getFilteredSnowItems();
+    var cached=null;
+    for(var i=0;i<items.length;i++){ if(items[i].ctask===ctaskNo){ cached=items[i]; break; } }
+    // Show cached fields immediately so click always feels responsive
+    if(cached) renderCtaskDetailModalFromCache(cached, '');
+    else openMod(ctaskNo, '<div class="ldg">Loading full CTASK from ServiceNow…</div>');
+
+    apiGet('/api/snow/ctask/'+encodeURIComponent(ctaskNo)).then(function(d){
+      if(d&&!d.error){ renderCtaskDetailModal(d, cached); return; }
+      if(cached) renderCtaskDetailModalFromCache(cached, (d&&d.error)||'Live fetch failed');
+      else openMod(ctaskNo, '<div style="color:var(--er)">'+escHtml((d&&d.error)||'CTASK not found')+'</div>');
+    }).catch(function(e){
+      if(cached) renderCtaskDetailModalFromCache(cached, e.message||String(e));
+      else openMod(ctaskNo, '<div style="color:var(--er)">'+escHtml(e.message||String(e))+'</div>');
+    });
+  }catch(err){
+    console.error('openCtaskDetail', err);
+    openMod(ctaskNo||'CTASK', '<div style="color:var(--er)">'+escHtml(err&&err.message?err.message:String(err))+'</div>');
+  }
+}
+window.openCtaskDetail=openCtaskDetail;
+function renderCtaskDetailModal(d, cached){
+  var row=function(k,v){
+    if(v==null||v==='') return '';
+    return '<dt>'+escHtml(k)+'</dt><dd>'+escHtml(v)+'</dd>';
+  };
+  var ms=(d.ms_names&&d.ms_names.length)?d.ms_names.join(', '):((cached&&cached.ms_names)||[]).join(', ');
+  var mf=(d.mf_names&&d.mf_names.length)?d.mf_names.join(', '):((cached&&cached.mf_names)||[]).join(', ');
+  var body='<dl class="m-dl">'
+    +row('CTASK', d.number)
+    +row('CTASK name', d.ctask_name||d.short_description)
+    +row('Parent CHG', d.chg)
+    +row('CHG name', d.chg_short)
+    +row('CHG state', d.chg_state)
+    +row('CHG close code', d.chg_close_code)
+    +row('CHG assignment group', d.chg_assignment_group)
+    +row('Configuration Item (CI)', d.configuration_item)
+    +row('Type', d.type)
+    +row('State', d.state)
+    +row('Priority', d.priority)
+    +row('Close code', d.close_code)
+    +row('Close notes', d.close_notes)
+    +row('Assigned to', d.assigned_to)
+    +row('Assignment group', d.assignment_group)
+    +row('Planned start', d.planned_start)
+    +row('Planned end', d.planned_end)
+    +row('Work start', d.work_start)
+    +row('Work end', d.work_end)
+    +row('Expected start', d.expected_start)
+    +row('Due date', d.due_date)
+    +row('Closed at', d.closed_at)
+    +row('Created', d.created_on)
+    +row('Updated', d.updated_on)
+    +(ms?row('Microservices', ms):'')
+    +(mf?row('Microfrontends', mf):'')
+    +'</dl>'
+    +'<div style="font-size:11px;font-weight:800;color:var(--t3);margin:4px 0 6px;text-transform:uppercase;letter-spacing:.06em">Description (ServiceNow)</div>'
+    +'<div class="m-desc">'+(d.description?escHtml(d.description):'<span style="color:var(--t3)">No description on this CTASK.</span>')+'</div>'
+    +'<div style="font-size:10px;color:var(--t3);margin-top:10px">Live from ServiceNow · '+escHtml(d.source||'servicenow')+'</div>';
+  openMod((d.number||'CTASK')+(d.ctask_name?(' · '+d.ctask_name):'')+(d.chg?(' · '+d.chg):''), body);
+}
+function renderCtaskDetailModalFromCache(it, errMsg){
   var ms=(it.ms_names||[]).join(', ')||'—';
   var mf=(it.mf_names||[]).join(', ')||'—';
-  var body=''
-    +'<b>CTASK:</b> '+escHtml(it.ctask)+'<br>'
-    +'<b>Parent CHG:</b> '+escHtml(it.chg||'—')+'<br>'
-    +'<b>Service / CI:</b> '+escHtml(it.service||'—')+'<br>'
-    +'<b>Short description:</b> '+escHtml(it.ctask_short||'—')+'<br>'
-    +'<b>Type:</b> '+escHtml(it.ctask_type||'—')+' · <b>State:</b> '+escHtml(it.ctask_state||'—')+'<br>'
-    +'<b>Assigned to:</b> '+escHtml(it.assigned_to||'—')+'<br>'
-    +'<b>Assignment group:</b> '+escHtml(it.assignment_group||'DIG-SOCE-SRE-OCP')+'<br>'
-    +'<b>Planned start:</b> '+escHtml(it.planned_start||'—')+'<br>'
-    +'<b>Planned end:</b> '+escHtml(it.planned_end||'—')+'<br>'
-    +'<b>Lead time:</b> '+(it.lt_hours!=null?escHtml(it.lt_hours)+'h':'—')+'<br>'
-    +'<b>CHG short:</b> '+escHtml(it.chg_short||'—')+'<br>'
-    +'<b>CHG state:</b> '+escHtml(it.chg_state||'—')+'<br>'
-    +'<b>CHG assignment group:</b> '+escHtml(it.chg_assignment_group||'—')+'<br>'
-    +'<b>Microservices:</b> '+escHtml(ms)+'<br>'
-    +'<b>Microfrontends:</b> '+escHtml(mf)+'<br>'
-    +'<b>Description:</b><pre style="white-space:pre-wrap;font-size:11px;background:#f4f7fb;padding:10px;border-radius:8px;margin-top:8px;max-height:280px;overflow:auto">'+escHtml(it.description||'—')+'</pre>';
-  openMod(it.ctask+(it.chg?(' · '+it.chg):''), body);
+  var body=(errMsg?('<div style="font-size:11px;color:var(--wn);margin-bottom:10px">Live fetch failed ('+escHtml(errMsg)+'). Showing cached fields.</div>'):'')
+    +'<dl class="m-dl">'
+    +'<dt>CTASK</dt><dd>'+escHtml(it.ctask)+'</dd>'
+    +'<dt>CTASK name</dt><dd>'+escHtml(it.ctask_short||'—')+'</dd>'
+    +'<dt>Parent CHG</dt><dd>'+escHtml(it.chg||'—')+'</dd>'
+    +'<dt>Configuration Item (CI)</dt><dd>'+escHtml(it.service||'—')+'</dd>'
+    +'<dt>Type</dt><dd>'+escHtml(it.ctask_type||'—')+'</dd>'
+    +'<dt>State</dt><dd>'+escHtml(it.ctask_state||'—')+'</dd>'
+    +'<dt>Close code</dt><dd>'+escHtml(it.ctask_close_code||'—')+'</dd>'
+    +'<dt>Close notes</dt><dd>'+escHtml(it.ctask_close_notes||'—')+'</dd>'
+    +'<dt>Assigned to</dt><dd>'+escHtml(it.assigned_to||'—')+'</dd>'
+    +'<dt>Assignment group</dt><dd>'+escHtml(it.assignment_group||'DIG-SOCE-SRE-OCP')+'</dd>'
+    +'<dt>Planned start</dt><dd>'+escHtml(it.planned_start||'—')+'</dd>'
+    +'<dt>Planned end</dt><dd>'+escHtml(it.planned_end||'—')+'</dd>'
+    +'<dt>Closed at</dt><dd>'+escHtml(it.closed_at||'—')+'</dd>'
+    +'<dt>CHG name</dt><dd>'+escHtml(it.chg_short||'—')+'</dd>'
+    +'<dt>CHG state</dt><dd>'+escHtml(it.chg_state||'—')+'</dd>'
+    +'<dt>CHG assignment group</dt><dd>'+escHtml(it.chg_assignment_group||'—')+'</dd>'
+    +'<dt>Microservices</dt><dd>'+escHtml(ms)+'</dd>'
+    +'<dt>Microfrontends</dt><dd>'+escHtml(mf)+'</dd>'
+    +'</dl>'
+    +'<div style="font-size:11px;font-weight:800;color:var(--t3);margin:4px 0 6px;text-transform:uppercase;letter-spacing:.06em">Description</div>'
+    +'<div class="m-desc">'+(it.description?escHtml(it.description):'<span style="color:var(--t3)">No description cached.</span>')+'</div>';
+  openMod(it.ctask+(it.ctask_short?(' · '+it.ctask_short):'')+(it.chg?(' · '+it.chg):''), body);
 }
 function renderOpsCtaskTable(list, title){
   var body=document.getElementById('ops-detail-body');
   var badge=document.getElementById('ops-detail-badge');
   var ttl=document.getElementById('ops-detail-title');
-  if(ttl) ttl.innerHTML=escHtml(title)+' <span class="cb" id="ops-detail-badge">'+(list.length)+' records</span>';
-  if(badge) badge.textContent=list.length+' records';
+  var src=list||[];
+  var filtered=applyOpsCtaskFilters(src);
+  var countLbl=filtered.length+(filtered.length!==src.length?(' of '+src.length):'')+' records';
+  if(ttl) ttl.innerHTML=escHtml(title)+' <span class="cb" id="ops-detail-badge">'+countLbl+'</span>';
+  if(badge) badge.textContent=countLbl;
   if(!body) return;
-  if(!list.length){ body.innerHTML='<div class="ldg">No matching CTASKs in selected range.</div>'; return; }
-  var h='<div style="overflow-x:auto;max-height:520px;overflow-y:auto"><table class="etbl"><thead><tr>'
-    +'<th>#</th><th>CTASK</th><th>CHG</th><th>Service</th><th>Short description</th>'
+  var bar=tableFilterBar([
+    {label:'CI', allLabel:'All CIs', values:uniqueSorted(src,function(it){return it.service;}), selected:OPS_F.ci, onChange:"setOpsFilter('ci',this.value)", minWidth:'180px'},
+    {label:'Type', allLabel:'All types', values:uniqueSorted(src,function(it){return it.ctask_type;}), selected:OPS_F.type, onChange:"setOpsFilter('type',this.value)", minWidth:'140px'},
+    {label:'State', allLabel:'All states', values:uniqueSorted(src,function(it){return it.ctask_state;}), selected:OPS_F.state, onChange:"setOpsFilter('state',this.value)", minWidth:'140px'},
+    {label:'Assigned to', allLabel:'All assignees', values:uniqueSorted(src,function(it){return it.assigned_to;}), selected:OPS_F.assigned, onChange:"setOpsFilter('assigned',this.value)", minWidth:'160px'}
+  ], 'resetOpsFilters()', "setOpsFilter('q',this.value)", 'CTASK#, name, CHG, CI…', OPS_F.q);
+  if(!src.length){ body.innerHTML=bar+'<div class="ldg">No matching CTASKs in selected range.</div>'; return; }
+  if(!filtered.length){ body.innerHTML=bar+'<div class="ldg">No CTASKs match the current filters.</div>'; return; }
+  var h=bar+'<div style="overflow-x:auto;max-height:520px;overflow-y:auto"><table class="etbl"><thead><tr>'
+    +'<th>#</th><th>CTASK</th><th>CHG</th><th>CI</th><th>CTASK name</th>'
     +'<th>Type</th><th>State</th><th>Assigned to</th><th>Planned start</th><th>Planned end</th>'
     +'</tr></thead><tbody>';
-  list.forEach(function(it,idx){
+  filtered.forEach(function(it,idx){
     var ctask=it.ctask||'—';
-    h+='<tr style="cursor:pointer" onclick="openCtaskDetail('+JSON.stringify(String(ctask))+')">'
+    h+='<tr class="ctask-row" data-ctask="'+escHtml(ctask)+'" style="cursor:pointer">'
       +'<td>'+(idx+1)+'</td>'
       +'<td><span style="font-family:var(--fm);font-size:10px;color:var(--br);font-weight:700">'+escHtml(ctask)+'</span></td>'
       +'<td><span style="font-family:var(--fm);font-size:10px">'+escHtml(it.chg||'—')+'</span></td>'
@@ -1065,19 +1351,29 @@ function renderOpsCtaskTable(list, title){
       +'</tr>';
   });
   h+='</tbody></table></div>'
-    +'<div style="font-size:10px;color:var(--t3);margin-top:8px">Click a row for full CTASK detail (description, MS/MF, CHG info).</div>';
+    +'<div style="font-size:10px;color:var(--t3);margin-top:8px">CI = Configuration Item · Click a row for full ServiceNow CTASK detail + description.</div>';
   body.innerHTML=h;
+  bindCtaskRowClicks(body);
 }
 function renderOpsChgTable(list){
   var body=document.getElementById('ops-detail-body');
   var ttl=document.getElementById('ops-detail-title');
-  if(ttl) ttl.innerHTML='CHGs under OCP <span class="cb">'+(list.length)+' CHGs</span>';
+  var src=list||[];
+  var filtered=applyOpsChgFilters(src);
+  var countLbl=filtered.length+(filtered.length!==src.length?(' of '+src.length):'')+' CHGs';
+  if(ttl) ttl.innerHTML='CHGs under OCP <span class="cb">'+countLbl+'</span>';
   if(!body) return;
-  if(!list.length){ body.innerHTML='<div class="ldg">No CHGs assigned to DIG-SOCE-SRE-OCP in selected range.</div>'; return; }
-  var h='<div style="overflow-x:auto;max-height:520px;overflow-y:auto"><table class="etbl"><thead><tr>'
-    +'<th>#</th><th>CHG</th><th>CHG assignment group</th><th>Service</th><th>CHG short description</th><th>State</th><th>OCP CTASKs</th><th>CTASK numbers</th>'
+  var bar=tableFilterBar([
+    {label:'CI', allLabel:'All CIs', values:uniqueSorted(src,function(r){return r.service;}), selected:OPS_F.ci, onChange:"setOpsFilter('ci',this.value)", minWidth:'180px'},
+    {label:'State', allLabel:'All states', values:uniqueSorted(src,function(r){return r.chg_state;}), selected:OPS_F.state, onChange:"setOpsFilter('state',this.value)", minWidth:'140px'},
+    {label:'Assignment group', allLabel:'All groups', values:uniqueSorted(src,function(r){return r.chg_assignment_group;}), selected:OPS_F.chgGroup, onChange:"setOpsFilter('chgGroup',this.value)", minWidth:'180px'}
+  ], 'resetOpsFilters()', "setOpsFilter('q',this.value)", 'CHG#, CI, description, CTASK…', OPS_F.q);
+  if(!src.length){ body.innerHTML=bar+'<div class="ldg">No CHGs assigned to DIG-SOCE-SRE-OCP in selected range.</div>'; return; }
+  if(!filtered.length){ body.innerHTML=bar+'<div class="ldg">No CHGs match the current filters.</div>'; return; }
+  var h=bar+'<div style="overflow-x:auto;max-height:520px;overflow-y:auto"><table class="etbl"><thead><tr>'
+    +'<th>#</th><th>CHG</th><th>CHG assignment group</th><th>CI</th><th>CHG short description</th><th>State</th><th>OCP CTASKs</th><th>CTASK numbers</th>'
     +'</tr></thead><tbody>';
-  list.forEach(function(row,idx){
+  filtered.forEach(function(row,idx){
     var nums=(row.ctasks||[]).map(function(c){return c.ctask;}).filter(Boolean);
     h+='<tr>'
       +'<td>'+(idx+1)+'</td>'
@@ -1088,14 +1384,17 @@ function renderOpsChgTable(list){
       +'<td style="font-size:11px">'+escHtml(row.chg_state||'—')+'</td>'
       +'<td style="text-align:center"><strong>'+nums.length+'</strong></td>'
       +'<td style="font-family:var(--fm);font-size:10px;max-width:360px">'
-      +nums.map(function(n){return '<a href="javascript:void(0)" onclick="openCtaskDetail('+JSON.stringify(String(n))+')" style="color:var(--br);margin-right:6px">'+escHtml(n)+'</a>';}).join('')
+      +nums.map(function(n){
+        return '<a href="javascript:void(0)" class="ctask-link" data-ctask="'+escHtml(n)+'" style="color:var(--br);margin-right:6px;cursor:pointer;text-decoration:underline">'+escHtml(n)+'</a>';
+      }).join('')
       +'</td></tr>';
   });
   h+='</tbody></table></div>'
-    +'<div style="font-size:10px;color:var(--t3);margin-top:8px">Only CHGs whose assignment group is DIG-SOCE-SRE-OCP. Click a CTASK for full detail.</div>';
+    +'<div style="font-size:10px;color:var(--t3);margin-top:8px">CI = Configuration Item · Click a CTASK number for full ServiceNow detail.</div>';
   body.innerHTML=h;
+  bindCtaskRowClicks(body);
 }
-function showOpsMetric(kind){
+function showOpsMetric(kind, opts){
   OPS_ACTIVE=kind||'ctask';
   document.querySelectorAll('#tab-pipeline .scard').forEach(function(c){c.classList.remove('active-metric');});
   var map={ctask:'m-ctask',ocpchg:'m-ocpchg',azkv:'m-azkv','3scale':'m-3scale',pipeline:'m-pipeline',kafka:'m-kafka',linked:'m-total-chg-link'};
@@ -1113,8 +1412,10 @@ function showOpsMetric(kind){
   };
   if(OPS_ACTIVE==='ocpchg') renderOpsChgTable(buckets.ocpchg||[]);
   else renderOpsCtaskTable(buckets[OPS_ACTIVE]||[], titles[OPS_ACTIVE]||'CTASK Detail');
-  var panel=document.getElementById('ops-detail-body');
-  if(panel) panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+  if(!(opts&&opts.noScroll)){
+    var panel=document.getElementById('ops-detail-body');
+    if(panel) panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
 }
 function rPIPE(){
   var buckets=getOpsBuckets();
@@ -1188,9 +1489,25 @@ function initCMRDetailWidget(){
   }
 }
 
+function setCmrDetailFilter(key, val){
+  if(key==='project') CMR_DETAIL_F.project=val||'';
+  else if(key==='cluster') CMR_DETAIL_F.cluster=val||'';
+  else if(key==='status') CMR_DETAIL_F.status=val||'';
+  else if(key==='q') CMR_DETAIL_F.q=val||'';
+  renderCmrDetailTable();
+  if(key==='q'){
+    var el=document.getElementById('cmr-detail-table');
+    var inp=el&&el.querySelector('input[type="search"]');
+    if(inp){ inp.focus(); var n=inp.value.length; try{inp.setSelectionRange(n,n);}catch(e){} }
+  }
+}
+function resetCmrDetailFilters(){
+  CMR_DETAIL_F={project:'', cluster:'', status:'', q:''};
+  renderCmrDetailTable();
+}
 function loadCMRDetail(dateStr){
   var sumEl=document.getElementById('cmr-detail-summary'),tbl=document.getElementById('cmr-detail-table');
-  if(!dateStr){if(tbl)tbl.innerHTML='<div class="ldg">Select a deployment date above.</div>';return;}
+  if(!dateStr){CMR_DETAIL_ROWS=[];if(tbl)tbl.innerHTML='<div class="ldg">Select a deployment date above.</div>';return;}
   var rows=[];
   CMR_DATA.forEach(function(r,idx){
     if(r.d!==dateStr)return;
@@ -1200,23 +1517,57 @@ function loadCMRDetail(dateStr){
       msn:ex.msn||[],mfn:ex.mfn||[],
       total:(ex.ms||0)+(ex.mf||0)+(ex.nms||0)+(ex.nmf||0),lt:lt,
       cluster:({app:'ocpappprdclu',ap2:'ocpappprdclu2',sso:'ssocpappprdclu',int:'ocpintprdclu',in2:'ocpintprdclu2'})[r.c]||r.c,
-      incident:r.i,idx:idx});
+      incident:r.i,idx:idx, dateStr:dateStr});
   });
+  CMR_DETAIL_ROWS=rows;
+  CMR_DETAIL_F={project:'', cluster:'', status:'', q:''}; // reset filters on date change
   var badge=document.getElementById('detail-badge');
   var dt=new Date(dateStr+'T00:00:00+05:30');
   if(badge)badge.textContent=dt.toLocaleDateString('en-IN',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})+' \xb7 '+rows.length+' CMR'+(rows.length!==1?'s':'');
-  var totMS=rows.reduce(function(s,r){return s+r.ms+r.nms;},0),totMF=rows.reduce(function(s,r){return s+r.mf+r.nmf;},0);
-  if(sumEl)sumEl.innerHTML='<strong style="color:#1a3acc">'+rows.length+' CMRs</strong> \xb7 <strong style="color:#1a3acc">'+totMS+' MS</strong> <strong style="color:#0a9450">'+totMF+' MF</strong>';
+  renderCmrDetailTable();
+}
+function renderCmrDetailTable(){
+  var sumEl=document.getElementById('cmr-detail-summary'),tbl=document.getElementById('cmr-detail-table');
+  var rows=CMR_DETAIL_ROWS||[];
   if(!tbl)return;
   if(rows.length===0){tbl.innerHTML='<div class="ldg">No CMR deployments for this date.</div>';dC('cmr-detail-chart');return;}
 
-  var h='<div style="overflow-x:auto"><table class="etbl"><thead><tr>';
+  var q=String(CMR_DETAIL_F.q||'').trim().toLowerCase();
+  var filtered=rows.filter(function(r){
+    if(CMR_DETAIL_F.project && r.project!==CMR_DETAIL_F.project) return false;
+    if(CMR_DETAIL_F.cluster && r.cluster!==CMR_DETAIL_F.cluster) return false;
+    if(CMR_DETAIL_F.status==='issue' && !r.incident) return false;
+    if(CMR_DETAIL_F.status==='success' && r.incident) return false;
+    if(q){
+      var blob=[r.chg,r.project,r.cluster,r.lt].join(' ').toLowerCase();
+      if(blob.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+
+  var totMS=filtered.reduce(function(s,r){return s+r.ms+r.nms;},0),totMF=filtered.reduce(function(s,r){return s+r.mf+r.nmf;},0);
+  if(sumEl)sumEl.innerHTML='<strong style="color:#1a3acc">'+filtered.length+(filtered.length!==rows.length?(' / '+rows.length):'')+' CMRs</strong> \xb7 <strong style="color:#1a3acc">'+totMS+' MS</strong> <strong style="color:#0a9450">'+totMF+' MF</strong>';
+
+  var statusVals=[];
+  if(rows.some(function(r){return r.incident;})) statusVals.push('issue');
+  if(rows.some(function(r){return !r.incident;})) statusVals.push('success');
+  var bar=tableFilterBar([
+    {label:'Project', allLabel:'All projects', values:uniqueSorted(rows,function(r){return r.project;}), selected:CMR_DETAIL_F.project, onChange:"setCmrDetailFilter('project',this.value)", minWidth:'160px'},
+    {label:'Cluster', allLabel:'All clusters', values:uniqueSorted(rows,function(r){return r.cluster;}), selected:CMR_DETAIL_F.cluster, onChange:"setCmrDetailFilter('cluster',this.value)", minWidth:'160px'},
+    {label:'Status', allLabel:'All status', values:statusVals, selected:CMR_DETAIL_F.status, onChange:"setCmrDetailFilter('status',this.value)", minWidth:'130px'}
+  ], 'resetCmrDetailFilters()', "setCmrDetailFilter('q',this.value)", 'CMR#, project…', CMR_DETAIL_F.q);
+  // Patch status option labels
+  bar=bar.replace('>issue<','>Incident<').replace('>success<','>Success<');
+
+  if(!filtered.length){tbl.innerHTML=bar+'<div class="ldg">No CMRs match the current filters.</div>';dC('cmr-detail-chart');return;}
+
+  var h=bar+'<div style="overflow-x:auto"><table class="etbl"><thead><tr>';
   h+='<th style="width:30px"></th><th>CMR No.</th><th>Project</th>';
   h+='<th style="color:#1a3acc">MS</th><th style="color:#0a9450">MF</th>';
   h+='<th style="color:#f97316">New MS \u2605</th><th style="color:#a855f7">New MF \u2605</th>';
   h+='<th>Total</th><th>Est. Time</th><th>Cluster</th><th>Status</th></tr></thead><tbody>';
 
-  rows.forEach(function(row,ri){
+  filtered.forEach(function(row,ri){
     var hasNames=(row.msn.length>0||row.mfn.length>0);
     var ltColor=row.lt>'~3'?'var(--er)':row.lt>'~2'?'var(--wn)':'var(--ok)';
     var rowId='svc-row-'+ri;
@@ -1287,12 +1638,12 @@ function loadCMRDetail(dateStr){
   // Chart
   dC('cmr-detail-chart');var cv=document.getElementById('cmr-detail-chart');if(!cv)return;
   CH['cmr-detail-chart']=new Chart(cv,{type:'bar',
-    data:{labels:rows.map(function(r){return r.project.length>18?r.project.substring(0,16)+'\u2026':r.project;}),
+    data:{labels:filtered.map(function(r){return r.project.length>18?r.project.substring(0,16)+'\u2026':r.project;}),
       datasets:[
-        {label:'MS',    data:rows.map(function(r){return r.ms;}),  backgroundColor:'#3b5cf5',borderRadius:3,borderSkipped:false},
-        {label:'MF',    data:rows.map(function(r){return r.mf;}),  backgroundColor:'#22c55e',borderRadius:3,borderSkipped:false},
-        {label:'New MS',data:rows.map(function(r){return r.nms;}), backgroundColor:'#f97316',borderRadius:3,borderSkipped:false},
-        {label:'New MF',data:rows.map(function(r){return r.nmf;}), backgroundColor:'#a855f7',borderRadius:3,borderSkipped:false}
+        {label:'MS',    data:filtered.map(function(r){return r.ms;}),  backgroundColor:'#3b5cf5',borderRadius:3,borderSkipped:false},
+        {label:'MF',    data:filtered.map(function(r){return r.mf;}),  backgroundColor:'#22c55e',borderRadius:3,borderSkipped:false},
+        {label:'New MS',data:filtered.map(function(r){return r.nms;}), backgroundColor:'#f97316',borderRadius:3,borderSkipped:false},
+        {label:'New MF',data:filtered.map(function(r){return r.nmf;}), backgroundColor:'#a855f7',borderRadius:3,borderSkipped:false}
       ]},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:10,font:{size:10}}}},
@@ -1330,13 +1681,29 @@ async function loadSnowData(){
   var lu=document.getElementById('lu');
   if(lu)lu.textContent='Loading ServiceNow...';
   snowError='';
-  CMR_DATA=[]; CMR_EXTRA=[]; NEW_MS_REGISTRY=[]; PRJ=[]; INC=[]; OCP_BIN_CHGS=[];
+  var params={
+    from_date:'2025-01-01',
+    assignment_group:'DIG-SOCE-SRE-OCP',
+    force_refresh:'false'
+  };
   try{
-    var data=await apiGet('/api/snow/cmr-data',{
-      from_date:'2025-01-01',
-      assignment_group:'DIG-SOCE-SRE-OCP',
-      force_refresh:'false'
-    });
+    // Fetch CMR + OCP Bin CHGs in parallel
+    var pair=await Promise.all([
+      apiGet('/api/snow/cmr-data', params),
+      apiGet('/api/snow/ocp-chgs', params).catch(function(e){ return {error:e.message||String(e), items:[]}; })
+    ]);
+    var data=pair[0];
+    var chgData=pair[1];
+
+    // Auto-retry once if cached connection failure left empty data
+    var hint=String((data&&(data.permission_hint||data.warning||data.error))||'');
+    var empty=!data||data.error||((data.cmr_data||[]).length===0 && !(data.ctask_count>0));
+    if(empty && /connection|reset|aborted|timeout|error/i.test(hint)){
+      params.force_refresh='true';
+      data=await apiGet('/api/snow/cmr-data', params);
+      chgData=await apiGet('/api/snow/ocp-chgs', params).catch(function(e){ return {error:e.message||String(e), items:[]}; });
+    }
+
     if(data.error){
       snowError=data.error;
       snowSource='none';
@@ -1359,34 +1726,26 @@ async function loadSnowData(){
         metric3_rule:data.metric3_rule||''
       };
       if(data.warning) snowError=data.warning;
-      if(data.permission_hint) snowError=data.permission_hint;
-      snowSource=CMR_DATA.length?'servicenow':'none';
+      if(data.permission_hint && !CMR_DATA.length) snowError=data.permission_hint;
+      snowSource=(CMR_DATA.length || (snowMeta.ctask_count>0))?'servicenow':'none';
       console.log('ServiceNow live:',CMR_DATA.length,'CMRs', snowMeta.ctask_count,'CTASKs',
         'failures', (data.failure_stats&&data.failure_stats.total_failures)||INC.length,
+        'cache', !!data.from_cache,
         data.close_code_stats||{});
+    }
+
+    if(chgData&&!chgData.error){
+      OCP_BIN_CHGS=Array.isArray(chgData.items)?chgData.items:[];
+      console.log('OCP Bin CHGs:', OCP_BIN_CHGS.length, chgData.from_cache?'(cache)':'');
+    } else if(chgData&&chgData.error){
+      console.log('OCP Bin CHGs error:', chgData.error);
     }
   }catch(e){
     snowError=e.message||String(e);
     snowSource='none';
   }
 
-  try{
-    var chgData=await apiGet('/api/snow/ocp-chgs',{
-      from_date:'2025-01-01',
-      assignment_group:'DIG-SOCE-SRE-OCP',
-      force_refresh:'false'
-    });
-    if(chgData&&!chgData.error){
-      OCP_BIN_CHGS=Array.isArray(chgData.items)?chgData.items:[];
-      console.log('OCP Bin CHGs:', OCP_BIN_CHGS.length);
-    } else if(chgData&&chgData.error){
-      console.log('OCP Bin CHGs error:', chgData.error);
-    }
-  }catch(e){
-    console.log('OCP Bin CHGs:', e.message||e);
-  }
-
-  return CMR_DATA.length>0 || OCP_BIN_CHGS.length>0;
+  return CMR_DATA.length>0 || OCP_BIN_CHGS.length>0 || (snowMeta.ctask_count>0);
 }
 
 // ── LOAD LIVE — Datadog infra only (no fake numbers) ─────
@@ -1412,26 +1771,28 @@ async function loadLive(){
   var params={from:datadogFromParam()};
   if(f.cl) params.cluster=f.cl;
 
-  try{
-    var ph=await apiGet('/api/dora/pod-health',params);
-    if(ph&&!ph.error&&ph.running!=null){
-      setEl('inf-pods',Number(ph.running).toLocaleString('en-IN'));
-      setEl('inf-failed',ph.failed!=null?ph.failed:'—');
-    }else{
-      setEl('inf-pods','—'); setEl('inf-failed','—');
-    }
-  }catch(e){ setEl('inf-pods','—'); setEl('inf-failed','—'); console.log('Pods:',e.message); }
+  var results=await Promise.all([
+    apiGet('/api/dora/pod-health',params).catch(function(e){ return {error:e.message}; }),
+    apiGet('/api/dora/apm-error-rate',params).catch(function(e){ return {error:e.message}; })
+  ]);
+  var ph=results[0], apm=results[1];
 
-  try{
-    var apm=await apiGet('/api/dora/apm-error-rate',params);
-    if(apm&&!apm.error&&apm.error_rate!=null){
-      setEl('inf-err',apm.error_rate+'%');
-      setEl('inf-p99',(apm.p99_ms!=null?apm.p99_ms:'—')+'ms');
-      setEl('inf-rps',apm.requests_per_min!=null?Number(apm.requests_per_min).toLocaleString('en-IN'):'—');
-    }else{
-      setEl('inf-err','—'); setEl('inf-p99','—'); setEl('inf-rps','—');
-    }
-  }catch(e){ setEl('inf-err','—'); setEl('inf-p99','—'); setEl('inf-rps','—'); console.log('APM:',e.message); }
+  if(ph&&!ph.error&&ph.running!=null){
+    setEl('inf-pods',Number(ph.running).toLocaleString('en-IN'));
+    setEl('inf-failed',ph.failed!=null?ph.failed:'—');
+  }else{
+    setEl('inf-pods','—'); setEl('inf-failed','—');
+    if(ph&&ph.error) console.log('Pods:',ph.error);
+  }
+
+  if(apm&&!apm.error&&apm.error_rate!=null){
+    setEl('inf-err',apm.error_rate+'%');
+    setEl('inf-p99',(apm.p99_ms!=null?apm.p99_ms:'—')+'ms');
+    setEl('inf-rps',apm.requests_per_min!=null?Number(apm.requests_per_min).toLocaleString('en-IN'):'—');
+  }else{
+    setEl('inf-err','—'); setEl('inf-p99','—'); setEl('inf-rps','—');
+    if(apm&&apm.error) console.log('APM:',apm.error);
+  }
 
   var now=new Date();
   var ts=now.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',hour12:true,

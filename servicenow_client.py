@@ -14,8 +14,12 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -36,6 +40,20 @@ class ServiceNowClient:
         self._token: Optional[str] = None
         self._token_expiry: float = 0
         self._last_ocp_bundle: Dict[str, Any] = {}
+        self._lock = threading.RLock()
+        self._session = requests.Session()
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            backoff_factor=0.6,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET", "POST"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=12, pool_maxsize=12)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
         self.CLUSTER_MAP = {
             "b2c": "app", "skyplus": "app", "6e skyplus": "app",
@@ -79,28 +97,29 @@ class ServiceNowClient:
         return f"https://{inst}"
 
     def _authenticate(self) -> str:
-        if self._token and time.time() < self._token_expiry:
+        with self._lock:
+            if self._token and time.time() < self._token_expiry:
+                return self._token
+
+            url = f"{self._base_url()}/oauth_token.do"
+            payload = {
+                "grant_type": "password",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "username": self.username,
+                "password": self.password,
+            }
+            resp = self._session.post(url, data=payload, timeout=20, verify=True)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if "access_token" not in data:
+                raise RuntimeError(f"No access_token in response: {data}")
+
+            self._token = data["access_token"]
+            self._token_expiry = time.time() + int(data.get("expires_in", 1800)) - 300
+            logger.info("ServiceNow token acquired (expires in %ss)", data.get("expires_in"))
             return self._token
-
-        url = f"{self._base_url()}/oauth_token.do"
-        payload = {
-            "grant_type": "password",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "username": self.username,
-            "password": self.password,
-        }
-        resp = requests.post(url, data=payload, timeout=20, verify=True)
-        resp.raise_for_status()
-        data = resp.json()
-
-        if "access_token" not in data:
-            raise RuntimeError(f"No access_token in response: {data}")
-
-        self._token = data["access_token"]
-        self._token_expiry = time.time() + int(data.get("expires_in", 1800)) - 300
-        logger.info("ServiceNow token acquired (expires in %ss)", data.get("expires_in"))
-        return self._token
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -110,7 +129,7 @@ class ServiceNowClient:
         }
 
     def _table_get(self, table: str, params: Dict[str, str],
-                   page_size: int = 500, max_records: Optional[int] = None) -> List[Dict]:
+                   page_size: int = 1000, max_records: Optional[int] = None) -> List[Dict]:
         url = f"{self._base_url()}/api/now/table/{table}"
         all_records: List[Dict] = []
         offset = 0
@@ -123,14 +142,15 @@ class ServiceNowClient:
         if max_records is None and requested > 0 and requested < page_size:
             max_records = requested
         base_params = {k: v for k, v in params.items() if k not in ("sysparm_offset", "sysparm_limit")}
+        headers = self._headers()
 
         while True:
             page = dict(base_params)
             page["sysparm_offset"] = str(offset)
             page["sysparm_limit"] = str(limit)
-            resp = requests.get(
-                url, headers=self._headers(), params=page,
-                timeout=30, verify=True
+            resp = self._session.get(
+                url, headers=headers, params=page,
+                timeout=45, verify=True
             )
             resp.raise_for_status()
             records = resp.json().get("result", [])
@@ -335,21 +355,108 @@ class ServiceNowClient:
                 filtered.append(t)
         return filtered
 
+    def fetch_ctask_detail(self, ctask_number: str) -> Dict[str, Any]:
+        """Fetch one CTASK from ServiceNow with full description + common fields."""
+        num = (ctask_number or "").strip()
+        if not num:
+            return {"error": "CTASK number required"}
+        fields = [
+            "number", "short_description", "description",
+            "change_task_type", "type", "state", "priority",
+            "close_code", "close_notes",
+            "assignment_group", "assigned_to",
+            "change_request", "parent", "cmdb_ci",
+            "planned_start_date", "planned_end_date",
+            "work_start", "work_end", "closed_at",
+            "sys_created_on", "sys_updated_on",
+            "expected_start", "due_date",
+        ]
+        try:
+            rows = self._table_get("change_task", {
+                "sysparm_query": f"number={num}",
+                "sysparm_fields": ",".join(fields),
+                "sysparm_display_value": "true",
+                "sysparm_exclude_reference_link": "true",
+                "sysparm_limit": "1",
+            }, page_size=1, max_records=1)
+        except requests.HTTPError as e:
+            # Retry without fields that sometimes ACL-block
+            logger.warning("CTASK detail full fields failed (%s) — retrying reduced set", e)
+            fields_safe = [f for f in fields if f not in ("close_code", "close_notes", "priority")]
+            rows = self._table_get("change_task", {
+                "sysparm_query": f"number={num}",
+                "sysparm_fields": ",".join(fields_safe),
+                "sysparm_display_value": "true",
+                "sysparm_exclude_reference_link": "true",
+                "sysparm_limit": "1",
+            }, page_size=1, max_records=1)
+
+        if not rows:
+            return {"error": f"CTASK {num} not found in ServiceNow", "number": num}
+
+        t = rows[0]
+        chg_num = self._dv(t.get("change_request")) or self._dv(t.get("parent"))
+        if chg_num and not str(chg_num).startswith("CHG"):
+            chg_num = ""
+        chg = {}
+        if chg_num:
+            chg = self.fetch_change_requests_by_numbers([chg_num]).get(chg_num, {})
+
+        desc = self._dv(t.get("description"))
+        ms_names, mf_names = self.parse_ms_mf_from_description(desc)
+        service = (
+            self._dv(t.get("cmdb_ci"))
+            or self._dv(chg.get("cmdb_ci"))
+            or ""
+        )
+        return {
+            "number": self._dv(t.get("number")) or num,
+            "ctask_name": self._dv(t.get("short_description")),
+            "short_description": self._dv(t.get("short_description")),
+            "description": desc,
+            "type": self._dv(t.get("change_task_type")) or self._dv(t.get("type")),
+            "state": self._dv(t.get("state")),
+            "priority": self._dv(t.get("priority")),
+            "close_code": self._dv(t.get("close_code")),
+            "close_notes": self._dv(t.get("close_notes")),
+            "assignment_group": self._dv(t.get("assignment_group")),
+            "assigned_to": self._dv(t.get("assigned_to")),
+            "configuration_item": service,
+            "chg": chg_num,
+            "chg_short": self._dv(chg.get("short_description")),
+            "chg_state": self._dv(chg.get("state")),
+            "chg_close_code": self._dv(chg.get("close_code")),
+            "chg_assignment_group": self._dv(chg.get("assignment_group")),
+            "planned_start": self._dv(t.get("planned_start_date")),
+            "planned_end": self._dv(t.get("planned_end_date")),
+            "work_start": self._dv(t.get("work_start")),
+            "work_end": self._dv(t.get("work_end")),
+            "expected_start": self._dv(t.get("expected_start")),
+            "due_date": self._dv(t.get("due_date")),
+            "closed_at": self._dv(t.get("closed_at")),
+            "created_on": self._dv(t.get("sys_created_on")),
+            "updated_on": self._dv(t.get("sys_updated_on")),
+            "ms_names": ms_names,
+            "mf_names": mf_names,
+            "source": "servicenow_live",
+        }
+
     def fetch_change_requests_by_numbers(self, numbers: List[str]) -> Dict[str, Dict]:
         out: Dict[str, Dict] = {}
         nums = [n for n in numbers if n and str(n).startswith("CHG")]
         if not nums:
             return out
         fields = [
-            "number", "short_description", "description",
+            "number", "short_description",
             "start_date", "end_date", "state", "close_code",
             "assignment_group", "assigned_to", "cmdb_ci",
             "category", "type", "risk",
         ]
-        for i in range(0, len(nums), 50):
-            batch = nums[i:i + 50]
+        batches = [nums[i:i + 80] for i in range(0, len(nums), 80)]
+
+        def fetch_batch(batch: List[str]) -> List[Dict]:
             try:
-                rows = self._table_get("change_request", {
+                return self._table_get("change_request", {
                     "sysparm_query": "numberIN" + ",".join(batch),
                     "sysparm_fields": ",".join(fields),
                     "sysparm_display_value": "true",
@@ -357,11 +464,18 @@ class ServiceNowClient:
                 })
             except requests.HTTPError as e:
                 logger.warning("CHG batch fetch failed: %s", e)
-                rows = []
-            for row in rows:
-                num = self._dv(row.get("number"))
-                if num:
-                    out[num] = row
+                return []
+            except Exception as e:
+                logger.warning("CHG batch fetch error: %s", e)
+                return []
+
+        workers = min(6, max(1, len(batches)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for rows in ex.map(fetch_batch, batches):
+                for row in rows:
+                    num = self._dv(row.get("number"))
+                    if num:
+                        out[num] = row
         return out
 
     def fetch_ocp_work_items(self, from_date: str = "2025-01-01",
@@ -396,6 +510,9 @@ class ServiceNowClient:
             end = self._dv(t.get("planned_end_date")) or self._dv(t.get("work_end")) or ""
             desc = self._dv(t.get("description"))
             ms_names, mf_names = self.parse_ms_mf_from_description(desc)
+            # Keep payload light — full text rarely needed beyond MS/MF parse + short preview
+            if len(desc) > 800:
+                desc = desc[:800] + "…"
 
             lt_hours = None
             if start and end:

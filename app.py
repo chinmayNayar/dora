@@ -106,6 +106,18 @@ def snow_test_tables():
     try: return jsonify(snow.test_tables())
     except Exception as e: return jsonify({"error": str(e)}), 500
 
+@app.get("/api/snow/ctask/<ctask_number>")
+def snow_ctask_detail(ctask_number: str):
+    """Full live CTASK record from ServiceNow (description included)."""
+    if not snow.is_configured():
+        return jsonify({"error": "ServiceNow not configured"}), 200
+    try:
+        detail = snow.fetch_ctask_detail(ctask_number)
+        return jsonify(detail)
+    except Exception as e:
+        logger.exception("CTASK detail fetch failed for %s", ctask_number)
+        return jsonify({"error": str(e), "number": ctask_number}), 200
+
 @app.get("/api/snow/ocp-work")
 def snow_ocp_work():
     """Live CTASK + CHG + service list for DIG-SOCE-SRE-OCP."""
@@ -124,7 +136,11 @@ def snow_ocp_work():
     try:
         result = snow.fetch_ocp_work_items(from_date=from_date, to_date=to_date, assignment_group=ag)
         result["from_cache"] = False
-        snow_cs(ck, result)
+        # Never persist failed/empty connection errors for long
+        if result.get("query_error"):
+            snow_cs(ck, result, t=20)
+        else:
+            snow_cs(ck, result)
         return jsonify(result)
     except Exception as e:
         logger.exception("OCP work fetch failed")
@@ -151,7 +167,10 @@ def snow_ocp_chgs():
             from_date=from_date, to_date=to_date, assignment_group=ag
         )
         result["from_cache"] = False
-        snow_cs(ck, result)
+        if result.get("query_error") or (result.get("total", 0) == 0 and result.get("error")):
+            snow_cs(ck, result, t=20)
+        else:
+            snow_cs(ck, result)
         return jsonify(result)
     except Exception as e:
         logger.exception("OCP bin CHG fetch failed")
@@ -163,7 +182,7 @@ def snow_cmr_data():
     to_date = request.args.get("to_date", None)
     ag = request.args.get("assignment_group", "") or SNOW_AG
     force = request.args.get("force_refresh", "false").lower() == "true"
-    ck = f"snow::v6::{from_date}::{to_date}::{ag}"
+    ck = f"snow::v7::{from_date}::{to_date}::{ag}"
     if not force:
         cached = snow_cg(ck)
         if cached:
@@ -173,10 +192,20 @@ def snow_cmr_data():
     if not snow.is_configured():
         return jsonify({"error": "ServiceNow not configured", "cmr_data": [], "total": 0}), 200
     try:
-        records = snow.fetch_change_requests(from_date=from_date, to_date=to_date, assignment_group=ag or None)
+        import concurrent.futures
+        # OCP CTASK/CHG collapse + Indigo failures in parallel (biggest latency win)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            f_rec = ex.submit(
+                snow.fetch_change_requests,
+                from_date=from_date, to_date=to_date, assignment_group=ag or None,
+            )
+            f_indigo = ex.submit(
+                snow.fetch_indigo_close_failures,
+                from_date=from_date, to_date=to_date,
+            )
+            records = f_rec.result()
+            indigo = f_indigo.result()
         result = snow.transform_to_dashboard_format(records)
-        # Overall IndiGo DIG-* close failures, excluding Cloud / Network
-        indigo = snow.fetch_indigo_close_failures(from_date=from_date, to_date=to_date)
         result = snow.merge_indigo_failures(result, indigo)
         result["assignment_group"] = ag
         if result["total"] == 0 and result.get("permission_hint"):
@@ -228,7 +257,20 @@ def snow_cmr_data():
             ),
         }
         result["from_cache"] = False
-        snow_cs(ck, result)
+        # Also warm the ocp-work cache so Pipeline tab is instant
+        ocp_ck = f"ocp::{from_date}::{to_date}::{ag}"
+        if snow._last_ocp_bundle and not snow._last_ocp_bundle.get("query_error"):
+            snow_cs(ocp_ck, dict(snow._last_ocp_bundle))
+        # Never lock in a failed empty payload for the full TTL
+        qerr = result.get("query_error") or (result.get("permission_hint") or "")
+        bad = (
+            (result.get("total", 0) == 0 and result.get("ctask_count", 0) == 0)
+            and ("error" in str(qerr).lower() or "connection" in str(qerr).lower() or "reset" in str(qerr).lower())
+        )
+        if bad:
+            snow_cs(ck, result, t=15)
+        else:
+            snow_cs(ck, result)
         return jsonify(result)
     except Exception as e:
         logger.exception("ServiceNow CMR fetch failed")

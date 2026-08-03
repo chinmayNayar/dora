@@ -84,7 +84,10 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
 .othbox{margin-top:13px;border-top:1px dashed var(--bd2);padding-top:13px}.othtitle{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:9px}
 .othgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px}.othi{font-size:11px;color:var(--t2);padding:5px 9px;background:#f4f7fb;border:1px solid var(--bd);border-radius:7px;font-family:var(--fm);cursor:pointer}.othi:hover{background:#edf2ff}
 .movl{position:fixed;inset:0;background:rgba(13,31,51,.48);z-index:999;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}.movl.on{display:flex}
-.modal{background:#fff;border-radius:18px;padding:24px;width:720px;max-width:94vw;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(13,31,51,.22)}
+.modal{background:#fff;border-radius:18px;padding:24px;width:860px;max-width:96vw;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(13,31,51,.22)}
+.m-dl{display:grid;grid-template-columns:160px 1fr;gap:6px 14px;font-size:12.5px;line-height:1.45;margin-bottom:14px}
+.m-dl dt{color:var(--t3);font-weight:700}.m-dl dd{margin:0;color:var(--t1);word-break:break-word}
+.m-desc{white-space:pre-wrap;font-size:12px;line-height:1.55;background:#f4f7fb;padding:12px 14px;border-radius:10px;border:1px solid var(--bd2);max-height:420px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .scard.active-metric{outline:2px solid var(--br);box-shadow:0 0 0 3px rgba(26,58,204,.12)}
 .mhdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bd);padding-bottom:13px;margin-bottom:16px}.mtitle{font-size:15px;font-weight:900}
 .mx{width:28px;height:28px;border-radius:50%;border:1px solid var(--bd);background:transparent;cursor:pointer;font-size:13px}
@@ -257,9 +260,19 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
             <option value="">All risk</option>
           </select>
         </div>
-        <div class="fg"><span class="fl">Configuration item</span>
+        <div class="fg"><span class="fl">Configuration item (CI)</span>
           <select class="fsl" id="ocpchg-ci" onchange="setOcpChgFilter('ci',this.value)" style="min-width:180px">
             <option value="">All CIs</option>
+          </select>
+        </div>
+        <div class="fg"><span class="fl">Type</span>
+          <select class="fsl" id="ocpchg-type" onchange="setOcpChgFilter('type',this.value)" style="min-width:140px">
+            <option value="">All types</option>
+          </select>
+        </div>
+        <div class="fg"><span class="fl">Assigned to</span>
+          <select class="fsl" id="ocpchg-assigned" onchange="setOcpChgFilter('assigned',this.value)" style="min-width:180px">
+            <option value="">All assignees</option>
           </select>
         </div>
         <div class="fg" style="flex:1;min-width:220px"><span class="fl">Search</span>
@@ -303,7 +316,7 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
     </div>
     <div class="dvd"></div>
     <div class="sec">
-      <div class="shr"><span class="pil p">Metric 4</span><div><div class="sti">Time to Restore (MTTR)</div><div class="ssu">Avg ServiceNow planned/work window on failed CHGs &middot; Updates with time range</div></div></div>
+      <div class="shr"><span class="pil p">Metric 4</span><div><div class="sti">Time to Restore (MTTR)</div><div class="ssu">From Pipeline Stage-by-Stage <b>Est. Time</b> sum (not CMR open→close) &middot; Shown when failures exist in range</div></div></div>
       <div class="sgrid" style="grid-template-columns:repeat(3,1fr)">
         <div class="scard"><div class="sac" style="background:var(--pu)"></div><div class="sv" id="mttr-val" style="color:var(--pu)">&ndash;</div><div class="sl">Mean Time to Restore</div></div>
         <div class="scard"><div class="sac" style="background:var(--er)"></div><div class="sv" id="mttr-issues" style="color:var(--er)">&ndash;</div><div class="sl">Rollbacks (Issues w/ Rollback)</div></div>
@@ -329,6 +342,19 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
     <div class="g12">
       <div class="card">
         <div class="ch">All Projects Summary <span class="cb" id="pg-badge">Page 1</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px;padding:10px 12px;background:#f4f7fb;border:1px solid var(--bd2);border-radius:10px">
+          <div class="fg"><span class="fl">Status</span>
+            <select class="fsl" id="proj-status" onchange="setProjFilter('status',this.value)" style="min-width:140px">
+              <option value="">All status</option>
+              <option value="issue">Issue</option>
+              <option value="clean">Clean</option>
+            </select>
+          </div>
+          <div class="fg" style="flex:1;min-width:200px"><span class="fl">Search</span>
+            <input class="fsl" id="proj-q" type="search" placeholder="Project name…" oninput="setProjFilter('q',this.value)" style="min-width:200px;width:100%;cursor:text">
+          </div>
+          <button class="btn" type="button" onclick="resetProjFilters()" style="height:30px;color:var(--t1);border-color:var(--bd2);background:#fff">Clear</button>
+        </div>
         <table class="etbl"><thead><tr><th>#</th><th>Project</th><th>CMRs</th><th>Share</th><th>Status</th></tr></thead><tbody id="proj-body"></tbody></table>
         <div class="pgn"><span class="pgi" id="pg-info">1&ndash;10</span><div class="pgb" id="pg-btns"></div></div>
         <div class="othbox"><div class="othtitle">Projects with no CMRs in selected range</div><div class="othgrid" id="oth-grid"></div></div>
@@ -382,7 +408,7 @@ body{font-family:var(--fn);background:#f0f4ff;color:var(--t1);min-height:100vh}
     </div>
     <div class="card" style="margin-top:14px">
       <div class="ch" id="ops-detail-title">CTASK Detail <span class="cb" id="ops-detail-badge">Select a metric above</span></div>
-      <div id="ops-detail-body"><div class="ldg">Click any metric card to see CTASK numbers, parent CHG, service, dates, assignee, and description.</div></div>
+      <div id="ops-detail-body"><div class="ldg">Click any metric card to see CTASK numbers, parent CHG, CI (configuration item), dates, assignee, and description.</div></div>
     </div>
     <div class="g2" style="margin-top:14px">
       <div class="card">
